@@ -48,7 +48,7 @@ final class TranscriptModel {
                 entries.append(entry)
             }
         }
-        assembler.subagents = SubagentRef.index(dir: subagentsDir)
+        assembler.subagents = SubagentIndex.load(dir: subagentsDir)
         snapshot = assembler.assemble(entries: entries)
     }
 }

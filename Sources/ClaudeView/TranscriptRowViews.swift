@@ -53,6 +53,8 @@ struct TranscriptRowView: View {
             }
         case .toolCall(let call):
             ToolCallRowView(call: call, isExpanded: $isExpanded, context: context)
+        case .forkLaunch(let fork):
+            ForkLaunchRowView(fork: fork, isExpanded: $isExpanded, context: context)
         case .info(let entry, let label):
             let display = InfoPresentation.display(for: entry, fallback: label)
             CollapsibleRow(isExpanded: $isExpanded) {
@@ -278,6 +280,51 @@ struct InfoExpandedView: View {
                 .padding(.leading, 22)
         case .raw:
             RawEntryView(entry: entry)
+        }
+    }
+}
+
+/// A forked skill (`/code-review` → background agent) anchored where it
+/// launched: its stream renders inline as a followable sub-session, with
+/// a spinner until the task notification says it finished.
+struct ForkLaunchRowView: View {
+    let fork: ForkLaunchRowData
+    @Binding var isExpanded: Bool
+    let context: RowContext
+
+    var body: some View {
+        CollapsibleRow(isExpanded: $isExpanded) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.caption)
+                .foregroundStyle(.purple)
+                .frame(width: 16)
+            Text(fork.skillName ?? fork.subagent?.name ?? "fork")
+                .font(.subheadline.weight(.semibold).monospaced())
+            if let stdout = fork.stdout {
+                Text(stdout)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            if fork.isPending {
+                ProgressView()
+                    .controlSize(.mini)
+            }
+        } content: {
+            Group {
+                if let subagent = fork.subagent, context.depth < RowContext.maxDepth {
+                    SubSessionView(
+                        subagent: subagent,
+                        agentIsRunning: fork.isPending && context.isLive,
+                        context: context)
+                } else if fork.subagent == nil {
+                    Text("sub-session transcript not found")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.leading, 22)
         }
     }
 }

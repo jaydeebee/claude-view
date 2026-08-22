@@ -59,7 +59,7 @@ import Testing
                 where !line.isEmpty {
                     entries.append(try TranscriptEntry(line: Data(line), index: i))
                 }
-                let subagents = SubagentRef.index(
+                let subagents = SubagentIndex.load(
                     dir: paths.subagentsDir(
                         projectSlug: project.slug, sessionId: transcript.sessionId))
                 let snapshot = SessionAssembler(subagents: subagents)

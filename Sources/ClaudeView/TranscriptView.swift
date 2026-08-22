@@ -210,6 +210,8 @@ private struct TranscriptLoadedView: View {
             return true
         case .toolCall(let call):
             return call.isPending || isMostRecent
+        case .forkLaunch(let fork):
+            return fork.isPending || isMostRecent
         case .thinking:
             return isMostRecent
         case .info, .unknown:

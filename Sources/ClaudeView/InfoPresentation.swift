@@ -50,9 +50,21 @@ enum InfoPresentation {
         case "turn_duration":
             guard let ms = entry.raw["durationMs"]?.doubleValue else { return nil }
             return ms < 1000 ? "\(Int(ms))ms" : String(format: "%.1fs", ms / 1000)
+        case "local_command":
+            return commandOutput(of: entry).map(firstLine)
         default:
             return entry.raw["content"]?.stringValue.map(firstLine)
         }
+    }
+
+    /// Inner text of the stdout/stderr envelope on local_command entries.
+    static func commandOutput(of entry: TranscriptEntry) -> String? {
+        guard let content = entry.raw["content"]?.stringValue else { return nil }
+        let out = LocalCommandMarkup.tagContent("local-command-stdout", in: content)
+        let err = LocalCommandMarkup.tagContent("local-command-stderr", in: content)
+        let joined = [out, err].compactMap { $0 }.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return joined.isEmpty ? nil : joined
     }
 
     static func humanize(_ label: String) -> String {
@@ -116,6 +128,9 @@ extension InfoPresentation {
             }
             return .raw
         case .system:
+            if entry.subtype == "local_command", let output = commandOutput(of: entry) {
+                return .text(output)
+            }
             if let content = entry.raw["content"]?.stringValue, !content.isEmpty {
                 return .text(content)
             }

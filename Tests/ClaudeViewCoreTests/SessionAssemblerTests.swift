@@ -155,8 +155,8 @@ import Testing
         ).write(to: dir.appendingPathComponent("agent-abc123.meta.json"))
         try Data("{}\n".utf8).write(to: dir.appendingPathComponent("agent-abc123.jsonl"))
 
-        let index = SubagentRef.index(dir: dir)
-        #expect(index.count == 1)
+        let index = SubagentIndex.load(dir: dir)
+        #expect(index.byToolUseId.count == 1)
 
         let assembler = SessionAssembler(subagents: index)
         let snapshot = assembler.assemble(entries: try entries([Fixtures.assistantToolUse]))

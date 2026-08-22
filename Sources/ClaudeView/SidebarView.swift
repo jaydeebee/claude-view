@@ -43,13 +43,14 @@ struct LiveSessionRow: View {
     let session: RegistrySession
 
     private var isBusy: Bool { session.status == "busy" }
+    private var isIdle: Bool { session.status == "idle" || session.status == nil }
 
     var body: some View {
         HStack(spacing: 8) {
             Circle()
-                .fill(isBusy ? Color.orange : Color.green)
+                .fill(isBusy ? Color.orange : isIdle ? Color.green : Color.yellow)
                 .frame(width: 8, height: 8)
-                .accessibilityLabel(isBusy ? "working" : "idle")
+                .accessibilityLabel(session.status ?? "idle")
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.name ?? session.sessionId?.prefix(8).description ?? "session")
                     .lineLimit(1)
@@ -65,6 +66,10 @@ struct LiveSessionRow: View {
             if isBusy {
                 ProgressView()
                     .controlSize(.small)
+            } else if !isIdle, let status = session.status {
+                Text(status)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 2)
