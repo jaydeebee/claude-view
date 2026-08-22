@@ -54,24 +54,30 @@ that feasible without changing this architecture.
 ```sh
 swift build          # or: swift run ClaudeView
 swift test
+scripts/make-app.sh  # dist/Claude View.app; CODESIGN_IDENTITY=... to sign
 ```
 
 Requires a current macOS and Xcode toolchain. No third-party dependencies.
 
+`CLAUDE_VIEW_REAL_DATA=1 swift test` additionally runs the canary suite,
+which parses and assembles every transcript in the real `~/.claude` —
+useful after a Claude Code update to catch format drift early.
+
 ## Roadmap
 
-- [ ] Charter: README, license, scaffolding
-- [ ] Tolerant transcript-entry model
-- [ ] Incremental JSONL tailer
-- [ ] Live-session registry + liveness
-- [ ] FSEvents watchers + session discovery
-- [ ] Session assembler (message grouping, tool pairing, subagent linking)
-- [ ] Sidebar: live sessions first, per-project history
-- [ ] Transcript view: collapse/expand, live-follow, in-progress rows auto-open
-- [ ] Raw JSON inspector; subagents as nested sub-sessions
-- [ ] App bundle + signing script
-- Later: richer Markdown rendering, file references as clickable links,
-  input relay into sessions
+- [x] Charter: README, license, scaffolding
+- [x] Tolerant transcript-entry model
+- [x] Incremental JSONL tailer
+- [x] Live-session registry + liveness
+- [x] FSEvents watchers + session discovery
+- [x] Session assembler (message grouping, tool pairing, subagent linking)
+- [x] Sidebar: live sessions first, per-project history
+- [x] Transcript view: collapse/expand, live-follow, in-progress rows auto-open
+- [x] Raw JSON inspector; subagents as nested sub-sessions
+- [x] App bundle + signing script
+- Later: richer Markdown rendering (block-level, code fences), file
+  references as clickable links, async initial load for very large
+  transcripts, input relay into sessions
 
 ## License
 
