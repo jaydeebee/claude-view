@@ -7,13 +7,19 @@ struct TranscriptView: View {
     let ref: SessionRef
     let paths: ClaudePaths
     let isLive: Bool
+    let isBusy: Bool
 
     @State private var model: TranscriptModel?
 
     var body: some View {
         Group {
             if let model {
-                TranscriptLoadedView(model: model, ref: ref, isLive: isLive)
+                TranscriptLoadedView(
+                    model: model, ref: ref, isLive: isLive, isBusy: isBusy
+                )
+                // Per-session view state (expansion, follow, newness) resets
+                // when another session is selected.
+                .id(ref)
             } else {
                 ProgressView()
             }
@@ -41,20 +47,43 @@ private struct TranscriptLoadedView: View {
     let model: TranscriptModel
     let ref: SessionRef
     let isLive: Bool
+    let isBusy: Bool
 
     @State private var expansionOverrides: [String: Bool] = [:]
     @State private var follow = true
     @State private var inspectedEntry: TranscriptEntry?
+    /// Rows past this index arrived after the view opened — they fade in.
+    @State private var initialRowCount: Int?
+
+    private static let tailAnchor = "transcript-tail"
 
     var body: some View {
         ScrollViewReader { proxy in
-            rowList
-                .onChange(of: model.snapshot.rows.count) {
-                    scrollToEnd(proxy: proxy)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    headerRow
+                    rowViews
+                    if isBusy {
+                        activityBar
+                            .transition(.opacity)
+                    }
+                    Color.clear
+                        .frame(height: 1)
+                        .id(Self.tailAnchor)
                 }
-                .onAppear {
-                    scrollToEnd(proxy: proxy)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .animation(.easeInOut(duration: 0.2), value: isBusy)
+            }
+            .onChange(of: model.snapshot.rows.count) {
+                scrollToEnd(proxy: proxy)
+            }
+            .onAppear {
+                if initialRowCount == nil {
+                    initialRowCount = model.snapshot.rows.count
                 }
+                scrollToEnd(proxy: proxy, animated: false)
+            }
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -67,30 +96,27 @@ private struct TranscriptLoadedView: View {
         .navigationTitle(model.snapshot.title ?? String(ref.sessionId.prefix(8)))
     }
 
-    private var rowContext: RowContext {
-        RowContext(
-            paths: model.paths,
-            sessionRef: ref,
-            isLive: isLive,
-            depth: 0,
-            onInspect: { inspectedEntry = $0 })
-    }
-
-    private var rowList: some View {
-        List {
-            headerRow
-                .listRowSeparator(.hidden)
-            ForEach(model.snapshot.rows) { row in
+    @ViewBuilder private var rowViews: some View {
+        ForEach(Array(model.snapshot.rows.enumerated()), id: \.element.id) { index, row in
+            NewRowFade(isNew: isNewRow(index)) {
                 TranscriptRowView(
                     row: row,
                     isExpanded: expansionBinding(for: row),
-                    context: rowContext
-                )
-                .id(row.id)
-                .listRowSeparator(.hidden)
+                    context: rowContext)
             }
+            .id(row.id)
         }
-        .listStyle(.plain)
+    }
+
+    /// More is coming: the session's agent is mid-turn.
+    private var activityBar: some View {
+        ProgressView()
+            .progressViewStyle(.linear)
+            .controlSize(.small)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 8)
+            .padding(.horizontal, 2)
+            .accessibilityLabel("Session is working")
     }
 
     private var headerRow: some View {
@@ -123,15 +149,37 @@ private struct TranscriptLoadedView: View {
         .help("Keep scrolled to the newest activity")
     }
 
-    private func scrollToEnd(proxy: ScrollViewProxy) {
-        guard follow, let last = model.snapshot.rows.last else { return }
-        proxy.scrollTo(last.id, anchor: .bottom)
+    private var rowContext: RowContext {
+        RowContext(
+            paths: model.paths,
+            sessionRef: ref,
+            isLive: isLive,
+            depth: 0,
+            onInspect: { inspectedEntry = $0 })
+    }
+
+    private func isNewRow(_ index: Int) -> Bool {
+        guard let initialRowCount else { return false }
+        return index >= initialRowCount
+    }
+
+    private func scrollToEnd(proxy: ScrollViewProxy, animated: Bool = true) {
+        guard follow else { return }
+        if animated {
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(Self.tailAnchor, anchor: .bottom)
+            }
+        } else {
+            proxy.scrollTo(Self.tailAnchor, anchor: .bottom)
+        }
     }
 
     // MARK: Expansion
 
-    /// Defaults follow activity: in-flight work is open, finished work folds
-    /// away. A manual toggle wins until the session is reselected.
+    /// Defaults follow activity: in-flight work is open, and so is the most
+    /// recent activity of a live session — fast tools complete between
+    /// polls, so pending alone was never visibly open. A manual toggle wins
+    /// until the session is reselected.
     private func expansionBinding(for row: SessionRow) -> Binding<Bool> {
         Binding(
             get: { expansionOverrides[row.id] ?? defaultExpansion(for: row) },
@@ -140,18 +188,37 @@ private struct TranscriptLoadedView: View {
     }
 
     private func defaultExpansion(for row: SessionRow) -> Bool {
+        let isMostRecent = isLive && row.id == model.snapshot.rows.last?.id
         switch row {
         case .prompt, .assistantText:
             return true
         case .toolCall(let call):
-            return call.isPending
+            return call.isPending || isMostRecent
         case .thinking:
-            // Open while it's the frontier of a live session — the "what is
-            // it doing right now" answer — folded once surpassed.
-            return isLive && row.id == model.snapshot.rows.last?.id
+            return isMostRecent
         case .info, .unknown:
             return false
         }
+    }
+}
+
+/// Newly appended rows fade in; everything older renders at full opacity
+/// immediately, including when merely scrolled back into view.
+struct NewRowFade<Content: View>: View {
+    let isNew: Bool
+    @ViewBuilder let content: Content
+
+    @State private var revealed = false
+
+    var body: some View {
+        content
+            .opacity(isNew && !revealed ? 0 : 1)
+            .onAppear {
+                guard isNew, !revealed else { return }
+                withAnimation(.easeOut(duration: 0.3)) {
+                    revealed = true
+                }
+            }
     }
 }
 

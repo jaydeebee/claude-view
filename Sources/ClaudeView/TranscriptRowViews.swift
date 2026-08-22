@@ -88,8 +88,10 @@ struct CollapsibleRow<Header: View, Content: View>: View {
             .buttonStyle(.plain)
             if isExpanded {
                 content
+                    .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.15), value: isExpanded)
     }
 }
 
@@ -139,7 +141,7 @@ struct ToolCallRowView: View {
                 if let subagent = call.subagent, context.depth < RowContext.maxDepth {
                     SubSessionView(
                         subagent: subagent,
-                        startsExpanded: call.isPending,
+                        agentIsRunning: call.isPending,
                         context: context)
                 }
                 if !call.isPending {

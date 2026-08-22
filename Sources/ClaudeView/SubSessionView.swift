@@ -9,7 +9,7 @@ import SwiftUI
 /// most recent rows.
 struct SubSessionView: View {
     let subagent: SubagentRef
-    let startsExpanded: Bool
+    let agentIsRunning: Bool
     let context: RowContext
 
     @State private var model: TranscriptModel?
@@ -49,7 +49,7 @@ struct SubSessionView: View {
         .onAppear {
             if !appeared {
                 appeared = true
-                isExpanded = startsExpanded
+                isExpanded = agentIsRunning
             }
         }
         .task(id: subagent.toolUseId) {
@@ -100,7 +100,9 @@ struct SubSessionView: View {
     }
 
     private func defaultExpansion(for row: SessionRow) -> Bool {
-        if case .toolCall(let call) = row { return call.isPending }
+        let isMostRecent = agentIsRunning && row.id == model?.snapshot.rows.last?.id
+        if case .toolCall(let call) = row { return call.isPending || isMostRecent }
+        if case .thinking = row { return isMostRecent }
         return false
     }
 }

@@ -8,10 +8,12 @@ struct ContentView: View {
             SidebarView(model: model)
         } detail: {
             if let selection = model.selection {
+                let live = model.liveRefs.first { $0.ref == selection }
                 TranscriptView(
                     ref: selection,
                     paths: model.paths,
-                    isLive: model.liveRefs.contains { $0.ref == selection })
+                    isLive: live != nil,
+                    isBusy: live?.session.status == "busy")
             } else {
                 ContentUnavailableView(
                     "Select a Session",
