@@ -7,6 +7,9 @@ struct SessionRef: Hashable, Identifiable {
     let projectSlug: String
     let sessionId: String
     let url: URL
+    /// For subagent transcripts opened directly: the parent session's
+    /// subagents dir, so agents-spawned-by-agents still resolve.
+    var subagentsDir: URL? = nil
 
     var id: String { sessionId }
 }
@@ -105,5 +108,58 @@ final class AppModel {
         let title = TranscriptPeek.quickTitle(url: transcript.url)
         titleCache[transcript.sessionId] = (transcript.modifiedAt, title)
         return title
+    }
+}
+
+/// A subagent currently doing work for a live session — surfaced in the
+/// sidebar tree under its parent. Background forks never appear in the
+/// session registry, so activity is inferred from transcript freshness.
+struct ActiveSubagent: Identifiable {
+    let ref: SessionRef
+    let title: String
+    let detail: String?
+
+    var id: String { ref.sessionId }
+}
+
+extension AppModel {
+    /// Top-level agents (not agents-of-agents) whose transcript was written
+    /// to in the last couple of minutes.
+    func activeSubagents(for parent: SessionRef) -> [ActiveSubagent] {
+        let dir = paths.subagentsDir(
+            projectSlug: parent.projectSlug, sessionId: parent.sessionId)
+        let index = SubagentIndex.load(dir: dir)
+        let cutoff = Date().addingTimeInterval(-120)
+
+        return index.byAgentId.values
+            .filter { $0.parentAgentId == nil }
+            .compactMap { agent -> (SubagentRef, Date)? in
+                let mtime = (try? agent.transcriptURL.resourceValues(
+                    forKeys: [.contentModificationDateKey]))?.contentModificationDate
+                guard let mtime, mtime > cutoff else { return nil }
+                return (agent, mtime)
+            }
+            .sorted { $0.1 > $1.1 }
+            .map { agent, _ in
+                ActiveSubagent(
+                    ref: SessionRef(
+                        projectSlug: parent.projectSlug,
+                        sessionId: "agent-\(agent.agentId)",
+                        url: agent.transcriptURL,
+                        subagentsDir: dir),
+                    title: agent.name ?? agent.agentType ?? "agent",
+                    detail: agent.taskDescription)
+            }
+    }
+
+    /// FSEvents drives refresh while files change; this slow heartbeat lets
+    /// quiet-again subagents age out of the sidebar.
+    func startHeartbeat() {
+        Task { @MainActor [weak self] in
+            while let self, !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                self.refresh()
+            }
+        }
     }
 }

@@ -27,7 +27,8 @@ struct TranscriptView: View {
             }
         }
         .task(id: ref) {
-            let model = TranscriptModel(ref: ref, paths: paths)
+            let model = TranscriptModel(
+                ref: ref, paths: paths, subagentsDir: ref.subagentsDir)
             model.isLive = isLive
             model.poll()
             self.model = model

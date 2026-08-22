@@ -13,6 +13,8 @@ public struct SubagentRef: Sendable {
     public let agentType: String?
     public let name: String?
     public let taskDescription: String?
+    /// Set on depth-2+ agents (spawned by another agent, not the session).
+    public let parentAgentId: String?
 }
 
 /// Every subagent under a session's subagents directory, keyed both ways.
@@ -38,7 +40,8 @@ public struct SubagentIndex: Sendable {
                 transcriptURL: dir.appendingPathComponent("\(base).jsonl"),
                 agentType: meta["agentType"]?.stringValue,
                 name: meta["name"]?.stringValue,
-                taskDescription: meta["description"]?.stringValue)
+                taskDescription: meta["description"]?.stringValue,
+                parentAgentId: meta["parentAgentId"]?.stringValue)
             index.byAgentId[ref.agentId] = ref
             if let toolUseId = ref.toolUseId {
                 index.byToolUseId[toolUseId] = ref

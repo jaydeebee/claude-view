@@ -15,6 +15,10 @@ struct SidebarView: View {
                     ForEach(model.liveRefs, id: \.ref) { live in
                         LiveSessionRow(session: live.session)
                             .tag(live.ref)
+                        ForEach(model.activeSubagents(for: live.ref)) { agent in
+                            ActiveSubagentRow(agent: agent)
+                                .tag(agent.ref)
+                        }
                     }
                 }
             }
@@ -92,5 +96,30 @@ struct HistorySessionRow: View {
             .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
+    }
+}
+
+struct ActiveSubagentRow: View {
+    let agent: ActiveSubagent
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.caption)
+                .foregroundStyle(.purple)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(agent.title)
+                    .font(.callout)
+                    .lineLimit(1)
+                if let detail = agent.detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+        .padding(.leading, 16)
+        .padding(.vertical, 1)
     }
 }
