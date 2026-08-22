@@ -45,4 +45,42 @@ import Testing
         }
         print("canary: parsed \(lineCount) lines")
     }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["CLAUDE_VIEW_REAL_DATA"] == "1"))
+    func assemblesEveryRealTranscript() throws {
+        let paths = ClaudePaths()
+        var totals = (transcripts: 0, rows: 0, orphans: 0, pending: 0)
+
+        for project in SessionDiscovery(paths: paths).projects() {
+            for transcript in project.transcripts {
+                let data = try Data(contentsOf: transcript.url)
+                var entries: [TranscriptEntry] = []
+                for (i, line) in data.split(separator: UInt8(ascii: "\n")).enumerated()
+                where !line.isEmpty {
+                    entries.append(try TranscriptEntry(line: Data(line), index: i))
+                }
+                let subagents = SubagentRef.index(
+                    dir: paths.subagentsDir(
+                        projectSlug: project.slug, sessionId: transcript.sessionId))
+                let snapshot = SessionAssembler(subagents: subagents)
+                    .assemble(entries: entries)
+
+                totals.transcripts += 1
+                totals.rows += snapshot.rows.count
+                for case .info(_, let label) in snapshot.rows
+                where label == "orphan tool result" {
+                    totals.orphans += 1
+                }
+                for case .toolCall(let call) in snapshot.rows where call.isPending {
+                    totals.pending += 1
+                }
+            }
+        }
+
+        #expect(totals.transcripts > 0)
+        print(
+            "canary: assembled \(totals.transcripts) transcripts, "
+                + "\(totals.rows) rows, \(totals.orphans) orphan results, "
+                + "\(totals.pending) pending calls")
+    }
 }
