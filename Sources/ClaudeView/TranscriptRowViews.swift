@@ -74,6 +74,15 @@ struct TranscriptRowView: View {
             } content: {
                 InfoExpandedView(entry: entry)
             }
+            // Turn boundaries get the green wash that answers the prompt
+            // row's blue: end of turn, next turn begins.
+            .padding(entry.subtype == "turn_duration" ? 8 : 0)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(
+                        entry.subtype == "turn_duration"
+                            ? Color.green.opacity(0.09) : Color.clear))
         case .unknown(let entry):
             CollapsibleRow(isExpanded: $isExpanded) {
                 Label(
