@@ -171,7 +171,7 @@ struct ToolCallRowView: View {
                 if let subagent = call.subagent, context.depth < RowContext.maxDepth {
                     SubSessionView(
                         subagent: subagent,
-                        agentIsRunning: call.isPending,
+                        agentIsRunning: call.isPending && context.isLive,
                         context: context)
                 }
                 if !call.isPending {
@@ -189,9 +189,14 @@ struct ToolCallRowView: View {
     }
 
     @ViewBuilder private var statusBadge: some View {
-        if call.isPending {
+        if call.isPending && context.isLive {
             ProgressView()
                 .controlSize(.mini)
+        } else if call.isPending {
+            Image(systemName: "hourglass")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .help("Never completed — the session ended first")
         } else if call.resultIsError {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.caption)
@@ -307,9 +312,14 @@ struct ForkLaunchRowView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
-            if fork.isPending {
+            if fork.isPending && context.isLive {
                 ProgressView()
                     .controlSize(.mini)
+            } else if fork.isPending {
+                Image(systemName: "hourglass")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .help("Never completed — the session ended first")
             }
         } content: {
             Group {

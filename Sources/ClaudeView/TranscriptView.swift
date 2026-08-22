@@ -13,7 +13,9 @@ struct TranscriptView: View {
 
     var body: some View {
         Group {
-            if let model {
+            // The ref check matters: on session switch the old model is
+            // still in state for a frame — never render it under a new ref.
+            if let model, model.ref == ref {
                 TranscriptLoadedView(
                     model: model, ref: ref, isLive: isLive, isBusy: isBusy
                 )
@@ -52,8 +54,9 @@ private struct TranscriptLoadedView: View {
     @State private var expansionOverrides: [String: Bool] = [:]
     @State private var follow = true
     @State private var inspectedEntry: TranscriptEntry?
-    /// Rows past this index arrived after the view opened — they fade in.
-    @State private var initialRowCount: Int?
+    /// Rows not in this set arrived after the view opened — they fade in.
+    /// Identity-based: filtered rows shift indices, ids never lie.
+    @State private var initialRowIds: Set<String>?
 
     private static let tailAnchor = "transcript-tail"
 
@@ -78,12 +81,14 @@ private struct TranscriptLoadedView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: isBusy)
-            .onChange(of: model.snapshot.rows.count) {
+            // entryCount grows with every appended line — a monotonic
+            // trigger immune to the display-row filter's comings and goings.
+            .onChange(of: model.snapshot.entryCount) {
                 scrollToEnd(proxy: proxy)
             }
             .onAppear {
-                if initialRowCount == nil {
-                    initialRowCount = displayRows.count
+                if initialRowIds == nil {
+                    initialRowIds = Set(displayRows.map(\.id))
                 }
                 scrollToEnd(proxy: proxy, animated: false)
             }
@@ -114,8 +119,8 @@ private struct TranscriptLoadedView: View {
     }
 
     @ViewBuilder private var rowViews: some View {
-        ForEach(Array(displayRows.enumerated()), id: \.element.id) { index, row in
-            NewRowFade(isNew: isNewRow(index)) {
+        ForEach(displayRows) { row in
+            NewRowFade(isNew: isNewRow(row)) {
                 TranscriptRowView(
                     row: row,
                     isExpanded: expansionBinding(for: row),
@@ -174,9 +179,9 @@ private struct TranscriptLoadedView: View {
             onInspect: { inspectedEntry = $0 })
     }
 
-    private func isNewRow(_ index: Int) -> Bool {
-        guard let initialRowCount else { return false }
-        return index >= initialRowCount
+    private func isNewRow(_ row: SessionRow) -> Bool {
+        guard let initialRowIds else { return false }
+        return !initialRowIds.contains(row.id)
     }
 
     private func scrollToEnd(proxy: ScrollViewProxy, animated: Bool = true) {
@@ -193,9 +198,10 @@ private struct TranscriptLoadedView: View {
     // MARK: Expansion
 
     /// Defaults follow activity: in-flight work is open, and so is the most
-    /// recent activity of a live session — fast tools complete between
-    /// polls, so pending alone was never visibly open. A manual toggle wins
-    /// until the session is reselected.
+    /// recent activity of a live session. Pending only counts as in-flight
+    /// while the session lives — a dead session's unanswered call is a
+    /// historical fact, not work in progress. A manual toggle wins until
+    /// the session is reselected.
     private func expansionBinding(for row: SessionRow) -> Binding<Bool> {
         Binding(
             get: { expansionOverrides[row.id] ?? defaultExpansion(for: row) },
@@ -209,9 +215,9 @@ private struct TranscriptLoadedView: View {
         case .prompt, .assistantText:
             return true
         case .toolCall(let call):
-            return call.isPending || isMostRecent
+            return (call.isPending && isLive) || isMostRecent
         case .forkLaunch(let fork):
-            return fork.isPending || isMostRecent
+            return (fork.isPending && isLive) || isMostRecent
         case .thinking:
             return isMostRecent
         case .info, .unknown:
@@ -221,7 +227,9 @@ private struct TranscriptLoadedView: View {
 }
 
 /// Newly appended rows fade in; everything older renders at full opacity
-/// immediately, including when merely scrolled back into view.
+/// immediately, including when merely scrolled back into view. Marks
+/// itself revealed on every appearance so no flag flip can strand a row
+/// invisible.
 struct NewRowFade<Content: View>: View {
     let isNew: Bool
     @ViewBuilder let content: Content
@@ -232,8 +240,11 @@ struct NewRowFade<Content: View>: View {
         content
             .opacity(isNew && !revealed ? 0 : 1)
             .onAppear {
-                guard isNew, !revealed else { return }
-                withAnimation(.easeOut(duration: 0.3)) {
+                if isNew && !revealed {
+                    withAnimation(.easeOut(duration: 0.3)) {
+                        revealed = true
+                    }
+                } else {
                     revealed = true
                 }
             }

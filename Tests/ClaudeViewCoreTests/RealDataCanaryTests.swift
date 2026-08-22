@@ -67,6 +67,12 @@ import Testing
 
                 totals.transcripts += 1
                 totals.rows += snapshot.rows.count
+                var rowIds = Set<String>()
+                for row in snapshot.rows {
+                    #expect(
+                        rowIds.insert(row.id).inserted,
+                        "duplicate row id \(row.id) in \(transcript.sessionId)")
+                }
                 for case .info(_, let label) in snapshot.rows
                 where label == "orphan tool result" {
                     totals.orphans += 1
