@@ -5,8 +5,18 @@ import SwiftUI
 struct TranscriptRowView: View {
     let row: SessionRow
     @Binding var isExpanded: Bool
+    let context: RowContext
 
     var body: some View {
+        content
+            .contextMenu {
+                Button("Inspect Entry") {
+                    context.onInspect(row.entry)
+                }
+            }
+    }
+
+    @ViewBuilder private var content: some View {
         switch row {
         case .prompt(_, let text):
             PromptRowView(text: text)
@@ -25,7 +35,7 @@ struct TranscriptRowView: View {
                     .padding(.leading, 22)
             }
         case .toolCall(let call):
-            ToolCallRowView(call: call, isExpanded: $isExpanded)
+            ToolCallRowView(call: call, isExpanded: $isExpanded, context: context)
         case .info(let entry, let label):
             CollapsibleRow(isExpanded: $isExpanded) {
                 Label(label, systemImage: "info.circle")
@@ -105,6 +115,7 @@ struct PromptRowView: View {
 struct ToolCallRowView: View {
     let call: ToolCallRowData
     @Binding var isExpanded: Bool
+    let context: RowContext
 
     private static let resultDisplayLimit = 8_000
 
@@ -125,6 +136,12 @@ struct ToolCallRowView: View {
         } content: {
             VStack(alignment: .leading, spacing: 8) {
                 inputSection
+                if let subagent = call.subagent, context.depth < RowContext.maxDepth {
+                    SubSessionView(
+                        subagent: subagent,
+                        startsExpanded: call.isPending,
+                        context: context)
+                }
                 if !call.isPending {
                     Divider()
                     resultSection

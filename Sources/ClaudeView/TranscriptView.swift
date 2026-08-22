@@ -44,6 +44,7 @@ private struct TranscriptLoadedView: View {
 
     @State private var expansionOverrides: [String: Bool] = [:]
     @State private var follow = true
+    @State private var inspectedEntry: TranscriptEntry?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -60,7 +61,19 @@ private struct TranscriptLoadedView: View {
                 followToggle
             }
         }
+        .sheet(item: $inspectedEntry) { entry in
+            EntryInspectorSheet(entry: entry)
+        }
         .navigationTitle(model.snapshot.title ?? String(ref.sessionId.prefix(8)))
+    }
+
+    private var rowContext: RowContext {
+        RowContext(
+            paths: model.paths,
+            sessionRef: ref,
+            isLive: isLive,
+            depth: 0,
+            onInspect: { inspectedEntry = $0 })
     }
 
     private var rowList: some View {
@@ -68,9 +81,13 @@ private struct TranscriptLoadedView: View {
             headerRow
                 .listRowSeparator(.hidden)
             ForEach(model.snapshot.rows) { row in
-                TranscriptRowView(row: row, isExpanded: expansionBinding(for: row))
-                    .id(row.id)
-                    .listRowSeparator(.hidden)
+                TranscriptRowView(
+                    row: row,
+                    isExpanded: expansionBinding(for: row),
+                    context: rowContext
+                )
+                .id(row.id)
+                .listRowSeparator(.hidden)
             }
         }
         .listStyle(.plain)

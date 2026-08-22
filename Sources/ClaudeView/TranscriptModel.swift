@@ -19,15 +19,17 @@ final class TranscriptModel {
     private let tailer: JSONLTailer
     private var assembler = SessionAssembler()
     private var entries: [TranscriptEntry] = []
+    private let subagentsDir: URL
 
-    init(ref: SessionRef, paths: ClaudePaths) {
+    /// `subagentsDir` is derived from the ref for top-level sessions; a
+    /// subagent's model passes its own directory so nested agents resolve.
+    init(ref: SessionRef, paths: ClaudePaths, subagentsDir: URL? = nil) {
         self.ref = ref
         self.paths = paths
         self.tailer = JSONLTailer(url: ref.url)
-    }
-
-    private var subagentsDir: URL {
-        paths.subagentsDir(projectSlug: ref.projectSlug, sessionId: ref.sessionId)
+        self.subagentsDir =
+            subagentsDir
+            ?? paths.subagentsDir(projectSlug: ref.projectSlug, sessionId: ref.sessionId)
     }
 
     /// Pull whatever the file has that we haven't seen. Cheap no-op when
