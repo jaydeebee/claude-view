@@ -142,3 +142,66 @@ enum Fixtures {
             """)
     }
 }
+
+@Suite struct JSONRenderTests {
+    private func value(_ json: String) throws -> JSONValue {
+        try JSONValue(data: Data(json.utf8))
+    }
+
+    @Test func bigIntegersSurviveExactly() throws {
+        let v = try value(#"{"id":1700000000123456789}"#)
+        #expect(v.prettyPrinted.contains("1700000000123456789"))
+        guard case .integer(let i)? = v["id"] else {
+            Issue.record("expected integer case")
+            return
+        }
+        #expect(i == 1_700_000_000_123_456_789)
+    }
+
+    @Test func negativeZeroKeepsItsSign() throws {
+        let v = try value(#"{"z":-0.0}"#)
+        #expect(v.prettyPrinted.contains("-0.0"))
+    }
+
+    @Test func bidiAndLineSeparatorsEscape() throws {
+        let v = JSONValue.object([
+            "s": .string("a\u{202E}b\u{2028}c")
+        ])
+        let printed = v.prettyPrinted
+        #expect(printed.contains("\\u202e"))
+        #expect(printed.contains("\\u2028"))
+        #expect(!printed.unicodeScalars.contains("\u{202E}"))
+        #expect(!printed.unicodeScalars.contains("\u{2028}"))
+    }
+
+    @Test func displayOptionsTruncateContainersAndStrings() throws {
+        let big = JSONValue.array((0..<10).map { .integer(Int64($0)) })
+        var text = ""
+        big.renderTokens(options: JSONRenderOptions(maxContainerItems: 3)) {
+            text += $0.text
+        }
+        #expect(text.contains("… +7 more items"))
+        // Full fidelity without options — prettyPrinted never truncates.
+        #expect(!big.prettyPrinted.contains("more items"))
+
+        let long = JSONValue.string(String(repeating: "x", count: 30))
+        var clipped = ""
+        long.renderTokens(options: JSONRenderOptions(stringLimit: 10)) {
+            clipped += $0.text
+        }
+        #expect(clipped.contains("+20 chars"))
+    }
+
+    @Test func alignedValuesShareAColumn() throws {
+        let v = JSONValue.object(["a": .integer(1), "longer_key": .integer(2)])
+        var text = ""
+        v.renderTokens(options: JSONRenderOptions(alignValues: true)) {
+            text += $0.text
+        }
+        let lines = text.split(separator: "\n").filter { $0.contains(":") }
+        let valueColumns = lines.compactMap { line in
+            line.lastIndex(of: " ").map { line.distance(from: line.startIndex, to: $0) }
+        }
+        #expect(Set(valueColumns).count == 1, "values should start at one column: \(text)")
+    }
+}
