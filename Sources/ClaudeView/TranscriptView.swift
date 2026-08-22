@@ -64,7 +64,7 @@ private struct TranscriptLoadedView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 7) {
+                LazyVStack(alignment: .leading, spacing: 4) {
                     headerRow
                     rowViews
                     Color.clear
@@ -120,14 +120,30 @@ private struct TranscriptLoadedView: View {
     }
 
     @ViewBuilder private var rowViews: some View {
-        ForEach(displayRows) { row in
+        let rows = displayRows
+        ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
             NewRowFade(isNew: isNewRow(row)) {
                 TranscriptRowView(
                     row: row,
                     isExpanded: expansionBinding(for: row),
                     context: rowContext)
             }
+            // Runs of the same row type stay tight (4); a type change opens
+            // the gap to 7 — repeated Bash calls read as one burst of work.
+            .padding(.top, index > 0 && rowFamily(rows[index - 1]) == rowFamily(row) ? 0 : 3)
             .id(row.id)
+        }
+    }
+
+    private func rowFamily(_ row: SessionRow) -> String {
+        switch row {
+        case .prompt: "prompt"
+        case .assistantText: "text"
+        case .thinking: "thinking"
+        case .toolCall: "tool"
+        case .forkLaunch: "fork"
+        case .info: "info"
+        case .unknown: "unknown"
         }
     }
 
