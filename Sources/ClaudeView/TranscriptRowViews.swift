@@ -21,7 +21,7 @@ struct TranscriptRowView: View {
         case .prompt(_, let text):
             PromptRowView(text: text)
         case .assistantText(_, let text):
-            MarkdownText(text: text)
+            MarkdownBlockText(text: text)
                 .padding(.vertical, 2)
         case .thinking(_, let text):
             CollapsibleRow(isExpanded: $isExpanded) {
