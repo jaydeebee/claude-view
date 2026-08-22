@@ -8,16 +8,10 @@ struct ContentView: View {
             SidebarView(model: model)
         } detail: {
             if let selection = model.selection {
-                // Placeholder until the transcript view lands: prove the
-                // selection joins to the right file on disk.
-                VStack(spacing: 8) {
-                    Text(selection.sessionId)
-                        .font(.title3.monospaced())
-                    Text(selection.url.path)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .padding()
+                TranscriptView(
+                    ref: selection,
+                    paths: model.paths,
+                    isLive: model.liveRefs.contains { $0.ref == selection })
             } else {
                 ContentUnavailableView(
                     "Select a Session",

@@ -12,6 +12,10 @@ public final class JSONLTailer {
     private var offset: UInt64 = 0
     private var partial = Data()
 
+    /// True when the last `poll()` found the file shrunk and restarted from
+    /// the top — accumulated state from earlier polls is now invalid.
+    public private(set) var didResetOnLastPoll = false
+
     private static let chunkSize = 1 << 20
 
     public init(url: URL) {
@@ -23,6 +27,7 @@ public final class JSONLTailer {
     /// If the file shrank (rotation, replacement — e.g. a forked session
     /// file swap), reading restarts from the top.
     public func poll() throws -> [Data] {
+        didResetOnLastPoll = false
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             // Vanished or unreadable; keep state, the file may reappear.
             return []
@@ -33,6 +38,7 @@ public final class JSONLTailer {
         if size < offset {
             offset = 0
             partial.removeAll()
+            didResetOnLastPoll = true
         }
         guard size > offset else { return [] }
 

@@ -66,8 +66,12 @@ import Testing
 
         // Replace with a shorter file, as a session fork/rotation would.
         try Data("{\"fresh\":1}\n".utf8).write(to: url)
+        #expect(!tailer.didResetOnLastPoll)
         let lines = try tailer.poll()
+        #expect(tailer.didResetOnLastPoll)
         #expect(lines.map { String(decoding: $0, as: UTF8.self) } == ["{\"fresh\":1}"])
+        _ = try tailer.poll()
+        #expect(!tailer.didResetOnLastPoll)
     }
 
     @Test func missingFileIsQuietUntilItAppears() throws {

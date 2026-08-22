@@ -80,6 +80,8 @@ public struct SessionSnapshot: Sendable {
     public var permissionMode: String?
     public var rows: [SessionRow] = []
     public var entryCount = 0
+
+    public init() {}
 }
 
 /// Folds transcript entries into display rows: file order, tool results

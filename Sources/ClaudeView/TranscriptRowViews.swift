@@ -1,0 +1,212 @@
+import ClaudeViewCore
+import SwiftUI
+
+/// Renders one SessionRow with the shared collapse/expand affordance.
+struct TranscriptRowView: View {
+    let row: SessionRow
+    @Binding var isExpanded: Bool
+
+    var body: some View {
+        switch row {
+        case .prompt(_, let text):
+            PromptRowView(text: text)
+        case .assistantText(_, let text):
+            MarkdownText(text: text)
+                .padding(.vertical, 2)
+        case .thinking(_, let text):
+            CollapsibleRow(isExpanded: $isExpanded) {
+                Label("Thinking", systemImage: "brain")
+                    .font(.callout.italic())
+                    .foregroundStyle(.secondary)
+            } content: {
+                MarkdownText(text: text)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 22)
+            }
+        case .toolCall(let call):
+            ToolCallRowView(call: call, isExpanded: $isExpanded)
+        case .info(let entry, let label):
+            CollapsibleRow(isExpanded: $isExpanded) {
+                Label(label, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } content: {
+                RawEntryView(entry: entry)
+            }
+        case .unknown(let entry):
+            CollapsibleRow(isExpanded: $isExpanded) {
+                Label(
+                    "unrecognized entry" + typeSuffix(entry),
+                    systemImage: "questionmark.square.dashed"
+                )
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            } content: {
+                RawEntryView(entry: entry)
+            }
+        }
+    }
+
+    private func typeSuffix(_ entry: TranscriptEntry) -> String {
+        if case .unknown(let type) = entry.kind { return ": \(type)" }
+        return ""
+    }
+}
+
+/// A chevron header that shows/hides its content.
+struct CollapsibleRow<Header: View, Content: View>: View {
+    @Binding var isExpanded: Bool
+    @ViewBuilder let header: Header
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                isExpanded.toggle()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    header
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if isExpanded {
+                content
+            }
+        }
+    }
+}
+
+struct PromptRowView: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text("❯")
+                .font(.body.weight(.bold).monospaced())
+                .foregroundStyle(Color.accentColor)
+            MarkdownText(text: text)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.accentColor.opacity(0.08)))
+        .padding(.vertical, 4)
+    }
+}
+
+struct ToolCallRowView: View {
+    let call: ToolCallRowData
+    @Binding var isExpanded: Bool
+
+    private static let resultDisplayLimit = 8_000
+
+    var body: some View {
+        CollapsibleRow(isExpanded: $isExpanded) {
+            Image(systemName: ToolPresentation.symbol(for: call.name))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+            Text(call.name)
+                .font(.callout.weight(.semibold).monospaced())
+            Text(ToolPresentation.summary(name: call.name, input: call.input))
+                .font(.callout.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            statusBadge
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                inputSection
+                if !call.isPending {
+                    Divider()
+                    resultSection
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.quaternary.opacity(0.5)))
+            .padding(.leading, 22)
+        }
+    }
+
+    @ViewBuilder private var statusBadge: some View {
+        if call.isPending {
+            ProgressView()
+                .controlSize(.mini)
+        } else if call.resultIsError {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+    }
+
+    @ViewBuilder private var inputSection: some View {
+        let lines = ToolPresentation.inputLines(call.input)
+        if lines.isEmpty {
+            Text("no input")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        } else {
+            Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 2) {
+                ForEach(lines, id: \.0) { line in
+                    GridRow {
+                        Text(line.0)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                        Text(line.1)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var resultSection: some View {
+        let text = ContentBlock.flattenedText(of: call.resultContent ?? .null)
+        if text.isEmpty {
+            Text("empty result")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        } else {
+            let clipped = text.count > Self.resultDisplayLimit
+            Text(clipped ? String(text.prefix(Self.resultDisplayLimit)) : text)
+                .font(.caption.monospaced())
+                .foregroundStyle(call.resultIsError ? .red : .primary)
+                .textSelection(.enabled)
+            if clipped {
+                Text("… \(text.count - Self.resultDisplayLimit) more characters")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+/// The entry exactly as Claude Code wrote it — the viewer's ground truth.
+struct RawEntryView: View {
+    let entry: TranscriptEntry
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            Text(entry.raw.prettyPrinted)
+                .font(.caption.monospaced())
+                .textSelection(.enabled)
+                .padding(8)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(.quaternary.opacity(0.5)))
+        .padding(.leading, 22)
+    }
+}
