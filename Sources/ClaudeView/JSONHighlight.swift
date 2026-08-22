@@ -19,7 +19,7 @@ enum JSONHighlight {
     // MARK: Palette (adaptive to light/dark)
 
     private static let keyColor = Color.teal
-    private static let stringColor = Color.green
+    private static let stringColor = Color.primary
     private static let numberColor = Color.purple
     private static let literalColor = Color.orange
     private static let punctuation = Color.secondary
