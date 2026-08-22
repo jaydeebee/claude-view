@@ -195,7 +195,17 @@ struct ToolCallRowView: View {
                     .fill(.quaternary.opacity(0.5)))
             .padding(.leading, 22)
         }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Self.mustard))
     }
+
+    /// The machinery's color: prompts are blue, turn ends green, tool
+    /// work a mild mustard. Prose and record-keeping stay unwashed.
+    private static let mustard = Color(red: 0.85, green: 0.7, blue: 0.2).opacity(0.10)
 
     @ViewBuilder private var statusBadge: some View {
         if call.isPending && context.isLive {
