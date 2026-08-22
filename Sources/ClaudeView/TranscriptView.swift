@@ -83,7 +83,7 @@ private struct TranscriptLoadedView: View {
             }
             .onAppear {
                 if initialRowCount == nil {
-                    initialRowCount = model.snapshot.rows.count
+                    initialRowCount = displayRows.count
                 }
                 scrollToEnd(proxy: proxy, animated: false)
             }
@@ -99,8 +99,22 @@ private struct TranscriptLoadedView: View {
         .navigationTitle(model.snapshot.title ?? String(ref.sessionId.prefix(8)))
     }
 
+    /// Empty thinking rows carry no information after the fact — show one
+    /// only while it is the live frontier ("thinking right now"). Thinking
+    /// with actual text (should any harness ever store it) always shows.
+    private var displayRows: [SessionRow] {
+        let rows = model.snapshot.rows
+        let lastId = rows.last?.id
+        return rows.filter { row in
+            if case .thinking(_, let text) = row, text.isEmpty {
+                return isLive && row.id == lastId
+            }
+            return true
+        }
+    }
+
     @ViewBuilder private var rowViews: some View {
-        ForEach(Array(model.snapshot.rows.enumerated()), id: \.element.id) { index, row in
+        ForEach(Array(displayRows.enumerated()), id: \.element.id) { index, row in
             NewRowFade(isNew: isNewRow(index)) {
                 TranscriptRowView(
                     row: row,

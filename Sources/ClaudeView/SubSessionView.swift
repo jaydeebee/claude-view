@@ -71,7 +71,13 @@ struct SubSessionView: View {
 
     @ViewBuilder private var rows: some View {
         if let model {
-            let all = model.snapshot.rows
+            let lastId = model.snapshot.rows.last?.id
+            let all = model.snapshot.rows.filter { row in
+                if case .thinking(_, let text) = row, text.isEmpty {
+                    return agentIsRunning && row.id == lastId
+                }
+                return true
+            }
             let shown = all.suffix(Self.rowLimit)
             VStack(alignment: .leading, spacing: 6) {
                 if all.count > shown.count {
