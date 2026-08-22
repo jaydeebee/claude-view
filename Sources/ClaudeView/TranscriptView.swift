@@ -224,8 +224,18 @@ private struct TranscriptLoadedView: View {
         )
     }
 
+    /// The frontier is the last row that says something — a trailing empty
+    /// thinking marker doesn't count, so the tool call before it stays open
+    /// while the model thinks about its result.
+    private var frontierRowId: String? {
+        model.snapshot.rows.last(where: { row in
+            if case .thinking(_, let text) = row, text.isEmpty { return false }
+            return true
+        })?.id
+    }
+
     private func defaultExpansion(for row: SessionRow) -> Bool {
-        let isMostRecent = isLive && row.id == model.snapshot.rows.last?.id
+        let isMostRecent = isLive && row.id == frontierRowId
         switch row {
         case .prompt, .assistantText:
             return true
@@ -285,9 +295,9 @@ struct PulseBar: View {
     var body: some View {
         Rectangle()
             .fill(Color.accentColor)
-            .frame(height: 3)
+            .frame(height: 6)
             .frame(maxWidth: .infinity)
-            .opacity(bright ? 0.5 : 0.12)
+            .opacity(bright ? 0.75 : 0.25)
             .animation(
                 .easeInOut(duration: 1.4).repeatForever(autoreverses: true),
                 value: bright

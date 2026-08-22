@@ -106,7 +106,11 @@ struct SubSessionView: View {
     }
 
     private func defaultExpansion(for row: SessionRow) -> Bool {
-        let isMostRecent = agentIsRunning && row.id == model?.snapshot.rows.last?.id
+        let frontierId = model?.snapshot.rows.last(where: { row in
+            if case .thinking(_, let text) = row, text.isEmpty { return false }
+            return true
+        })?.id
+        let isMostRecent = agentIsRunning && row.id == frontierId
         if case .toolCall(let call) = row { return call.isPending || isMostRecent }
         if case .thinking = row { return isMostRecent }
         return false
