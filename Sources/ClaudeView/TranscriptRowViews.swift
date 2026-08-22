@@ -53,7 +53,7 @@ struct TranscriptRowView: View {
                         .truncationMode(.middle)
                 }
             } content: {
-                RawEntryView(entry: entry)
+                InfoExpandedView(entry: entry)
             }
         case .unknown(let entry):
             CollapsibleRow(isExpanded: $isExpanded) {
@@ -238,5 +238,29 @@ struct RawEntryView: View {
             RoundedRectangle(cornerRadius: 6)
                 .fill(.quaternary.opacity(0.5)))
         .padding(.leading, 22)
+    }
+}
+
+/// Expanded body of an info row: the payload rendered readably when the
+/// type carries one (file snippet, queued prompt, listing), raw otherwise.
+struct InfoExpandedView: View {
+    let entry: TranscriptEntry
+
+    private static let textLimit = 12_000
+
+    var body: some View {
+        switch InfoPresentation.expanded(for: entry) {
+        case .code(let code):
+            CodeBlockView(code: code, language: nil)
+                .padding(.leading, 22)
+        case .text(let text):
+            Text(String(text.prefix(Self.textLimit)))
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .padding(.leading, 22)
+        case .raw:
+            RawEntryView(entry: entry)
+        }
     }
 }

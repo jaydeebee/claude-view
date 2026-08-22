@@ -77,3 +77,51 @@ enum InfoPresentation {
         s.hasPrefix("/") ? (s as NSString).abbreviatingWithTildeInPath : s
     }
 }
+
+extension InfoPresentation {
+    /// What expansion reveals: readable payload where the type has one,
+    /// the raw entry otherwise. (Full JSON stays on Inspect Entry.)
+    enum Expanded {
+        case code(String)
+        case text(String)
+        case raw
+    }
+
+    static func expanded(for entry: TranscriptEntry) -> Expanded {
+        switch entry.kind {
+        case .attachment:
+            let payload = entry.raw["attachment"]
+            switch payload?["type"]?.stringValue {
+            case "edited_text_file":
+                // Post-edit content with line numbers; a true diff against
+                // the ~/.claude/file-history backup is a future feature.
+                if let snippet = payload?["snippet"]?.stringValue {
+                    return .code(snippet)
+                }
+            case "queued_command":
+                if let prompt = payload?["prompt"]?.stringValue {
+                    return .text(prompt)
+                }
+            case "skill_listing":
+                if let content = payload?["content"]?.stringValue {
+                    return .text(content)
+                }
+            case "agent_listing_delta", "deferred_tools_delta":
+                if let lines = payload?["addedLines"]?.arrayValue {
+                    let joined = lines.compactMap(\.stringValue).joined(separator: "\n")
+                    if !joined.isEmpty { return .text(joined) }
+                }
+            default:
+                break
+            }
+            return .raw
+        case .system:
+            if let content = entry.raw["content"]?.stringValue, !content.isEmpty {
+                return .text(content)
+            }
+            return .raw
+        default:
+            return .raw
+        }
+    }
+}

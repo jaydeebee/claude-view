@@ -63,19 +63,21 @@ private struct TranscriptLoadedView: View {
                 LazyVStack(alignment: .leading, spacing: 4) {
                     headerRow
                     rowViews
-                    if isBusy {
-                        activityBar
-                            .transition(.opacity)
-                    }
                     Color.clear
                         .frame(height: 1)
                         .id(Self.tailAnchor)
                 }
-                .padding(12)
+                .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .animation(.easeInOut(duration: 0.2), value: isBusy)
             }
             .padding(3)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if isBusy {
+                    activityBar
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: isBusy)
             .onChange(of: model.snapshot.rows.count) {
                 scrollToEnd(proxy: proxy)
             }
@@ -109,14 +111,13 @@ private struct TranscriptLoadedView: View {
         }
     }
 
-    /// More is coming: the session's agent is mid-turn.
+    /// More is coming: pinned to the bottom edge of the pane while the
+    /// session's agent is mid-turn.
     private var activityBar: some View {
         ProgressView()
             .progressViewStyle(.linear)
             .controlSize(.small)
             .frame(maxWidth: .infinity)
-            .padding(.top, 8)
-            .padding(.horizontal, 2)
             .accessibilityLabel("Session is working")
     }
 
