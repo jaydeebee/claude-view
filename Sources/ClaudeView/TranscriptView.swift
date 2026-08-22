@@ -132,12 +132,10 @@ private struct TranscriptLoadedView: View {
     }
 
     /// More is coming: pinned to the bottom edge of the pane while the
-    /// session's agent is mid-turn.
+    /// session's agent is mid-turn. A breathing pulse, not a sweep — it
+    /// should read from the corner of your eye, not demand the center.
     private var activityBar: some View {
-        ProgressView()
-            .progressViewStyle(.linear)
-            .controlSize(.small)
-            .frame(maxWidth: .infinity)
+        PulseBar()
             .accessibilityLabel("Session is working")
     }
 
@@ -261,5 +259,25 @@ struct ChipView: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(Capsule().fill(.quaternary))
+    }
+}
+
+/// A thin bar that slowly breathes between faint and present.
+struct PulseBar: View {
+    @State private var bright = false
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.accentColor)
+            .frame(height: 3)
+            .frame(maxWidth: .infinity)
+            .opacity(bright ? 0.5 : 0.12)
+            .animation(
+                .easeInOut(duration: 1.4).repeatForever(autoreverses: true),
+                value: bright
+            )
+            .onAppear {
+                bright = true
+            }
     }
 }
