@@ -64,7 +64,7 @@ private struct TranscriptLoadedView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
+                LazyVStack(alignment: .leading, spacing: 7) {
                     headerRow
                     rowViews
                     Color.clear
@@ -74,7 +74,7 @@ private struct TranscriptLoadedView: View {
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(9)
+            .padding(6)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if isBusy {
                     activityBar
