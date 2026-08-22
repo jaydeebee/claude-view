@@ -272,7 +272,7 @@ struct RawEntryView: View {
 
     var body: some View {
         ScrollView(.horizontal) {
-            Text(entry.raw.prettyPrinted)
+            Text(JSONHighlight.attributed(entry.raw))
                 .font(.caption.monospaced())
                 .textSelection(.enabled)
                 .padding(8)

@@ -129,7 +129,7 @@ public enum JSONValue: Equatable, Sendable {
         }
     }
 
-    private static func quoted(_ s: String) -> String {
+    public static func quoted(_ s: String) -> String {
         var out = "\""
         for ch in s.unicodeScalars {
             switch ch {

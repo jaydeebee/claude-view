@@ -32,7 +32,7 @@ struct EntryInspectorSheet: View {
             Divider()
 
             ScrollView([.vertical, .horizontal]) {
-                Text(entry.raw.prettyPrinted)
+                Text(JSONHighlight.attributed(entry.raw))
                     .font(.callout.monospaced())
                     .textSelection(.enabled)
                     .padding()
