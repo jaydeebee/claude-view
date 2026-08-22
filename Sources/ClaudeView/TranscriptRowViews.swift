@@ -24,15 +24,32 @@ struct TranscriptRowView: View {
             MarkdownBlockText(text: text)
                 .padding(.vertical, 2)
         case .thinking(_, let text):
-            CollapsibleRow(isExpanded: $isExpanded) {
-                Label("Thinking", systemImage: "brain")
-                    .font(.callout.italic())
-                    .foregroundStyle(.secondary)
-            } content: {
-                MarkdownText(text: text)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 22)
+            if text.isEmpty {
+                // Claude Code stores thinking redacted on disk: empty text
+                // plus a signature. Mark the beat, promise nothing.
+                HStack(spacing: 6) {
+                    Image(systemName: "brain")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    Text("Thinking")
+                        .font(.callout.italic())
+                        .foregroundStyle(.tertiary)
+                    Text("not stored in transcript")
+                        .font(.caption)
+                        .foregroundStyle(.quaternary)
+                }
+                .padding(.leading, 14)
+            } else {
+                CollapsibleRow(isExpanded: $isExpanded) {
+                    Label("Thinking", systemImage: "brain")
+                        .font(.callout.italic())
+                        .foregroundStyle(.secondary)
+                } content: {
+                    MarkdownText(text: text)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 22)
+                }
             }
         case .toolCall(let call):
             ToolCallRowView(call: call, isExpanded: $isExpanded, context: context)
