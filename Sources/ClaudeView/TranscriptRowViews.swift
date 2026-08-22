@@ -37,10 +37,21 @@ struct TranscriptRowView: View {
         case .toolCall(let call):
             ToolCallRowView(call: call, isExpanded: $isExpanded, context: context)
         case .info(let entry, let label):
+            let display = InfoPresentation.display(for: entry, fallback: label)
             CollapsibleRow(isExpanded: $isExpanded) {
-                Label(label, systemImage: "info.circle")
+                Image(systemName: "info.circle")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                Text(display.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                if let detail = display.detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             } content: {
                 RawEntryView(entry: entry)
             }
@@ -128,9 +139,9 @@ struct ToolCallRowView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 16)
             Text(call.name)
-                .font(.callout.weight(.semibold).monospaced())
+                .font(.subheadline.weight(.semibold).monospaced())
             Text(ToolPresentation.summary(name: call.name, input: call.input))
-                .font(.callout.monospaced())
+                .font(.subheadline.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)

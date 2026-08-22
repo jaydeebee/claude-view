@@ -75,6 +75,7 @@ private struct TranscriptLoadedView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .animation(.easeInOut(duration: 0.2), value: isBusy)
             }
+            .padding(3)
             .onChange(of: model.snapshot.rows.count) {
                 scrollToEnd(proxy: proxy)
             }

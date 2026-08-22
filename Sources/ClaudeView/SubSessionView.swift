@@ -25,10 +25,10 @@ struct SubSessionView: View {
                 .font(.caption)
                 .foregroundStyle(.purple)
             Text(subagent.agentType ?? "agent")
-                .font(.callout.weight(.semibold))
+                .font(.subheadline.weight(.semibold))
             if let description = subagent.taskDescription {
                 Text(description)
-                    .font(.callout)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
