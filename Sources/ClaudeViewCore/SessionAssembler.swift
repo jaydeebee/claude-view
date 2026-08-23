@@ -144,6 +144,10 @@ public enum SessionRow: Sendable, Identifiable {
     case console(ConsoleRowData)
     case taskNotification(TaskNotificationRowData)
     case info(TranscriptEntry, label: String)
+    /// Session-state sidecars (mode stamps, latches, file-history
+    /// checkpoints): folded into header state where they carry any, and
+    /// kept as rows so a viewer can choose to see the file's full truth.
+    case bookkeeping(TranscriptEntry)
     case unknown(TranscriptEntry)
 
     public var id: String { "\(entry.id)#\(entry.index)" }
@@ -151,7 +155,7 @@ public enum SessionRow: Sendable, Identifiable {
     public var entry: TranscriptEntry {
         switch self {
         case .prompt(let e, _), .assistantText(let e, _), .thinking(let e, _),
-            .info(let e, _), .unknown(let e):
+            .info(let e, _), .bookkeeping(let e), .unknown(let e):
             return e
         case .toolCall(let data):
             return data.callEntry
@@ -179,7 +183,8 @@ public struct SessionSnapshot: Sendable {
 }
 
 /// Folds transcript entries into display rows: file order, tool results
-/// attached to their calls, sidecars folded into header state.
+/// attached to their calls, sidecars folded into header state and kept
+/// as bookkeeping rows (display decides whether to show them).
 public struct SessionAssembler: Sendable {
     public var subagents: SubagentIndex
 
@@ -201,15 +206,19 @@ public struct SessionAssembler: Sendable {
             switch entry.kind {
             case .aiTitle:
                 snapshot.title = entry.aiTitle ?? snapshot.title
+                snapshot.rows.append(.bookkeeping(entry))
             case .lastPrompt:
                 snapshot.lastPrompt = entry.lastPrompt ?? snapshot.lastPrompt
+                snapshot.rows.append(.bookkeeping(entry))
             case .mode:
                 snapshot.mode = entry.raw["mode"]?.stringValue ?? snapshot.mode
+                snapshot.rows.append(.bookkeeping(entry))
             case .permissionMode:
                 snapshot.permissionMode =
                     entry.raw["permissionMode"]?.stringValue ?? snapshot.permissionMode
+                snapshot.rows.append(.bookkeeping(entry))
             case .queueOperation, .fileHistorySnapshot, .fileHistoryDelta:
-                break  // bookkeeping, not conversation
+                snapshot.rows.append(.bookkeeping(entry))
             case .summary:
                 let text = entry.raw["summary"]?.stringValue ?? "Summary"
                 snapshot.rows.append(.info(entry, label: text))
@@ -231,7 +240,14 @@ public struct SessionAssembler: Sendable {
             case .assistant:
                 appendAssistantRows(entry, into: &snapshot, openCalls: &openCalls)
             case .unknown:
-                snapshot.rows.append(.unknown(entry))
+                // Conversation entries always carry a uuid; sidecars never
+                // do. An unknown uuid-less type (atis-latch and whatever
+                // the harness grows next) is session state, not content.
+                if entry.uuid == nil {
+                    snapshot.rows.append(.bookkeeping(entry))
+                } else {
+                    snapshot.rows.append(.unknown(entry))
+                }
             }
         }
 

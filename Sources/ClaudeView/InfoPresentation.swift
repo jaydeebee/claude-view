@@ -75,6 +75,52 @@ enum InfoPresentation {
         return joined.isEmpty ? nil : joined
     }
 
+    /// The one value a bookkeeping sidecar is really carrying — "plan"
+    /// for a permission-mode stamp, the title for ai-title, and for
+    /// types this build has never met, the first scalar field that
+    /// isn't routing plumbing.
+    static func bookkeepingDetail(for entry: TranscriptEntry) -> String? {
+        let raw = entry.raw
+        switch raw["type"]?.stringValue {
+        case "mode":
+            return raw["mode"]?.stringValue
+        case "permission-mode":
+            return raw["permissionMode"]?.stringValue
+        case "ai-title":
+            return raw["aiTitle"]?.stringValue
+        case "last-prompt":
+            return raw["lastPrompt"]?.stringValue.map(firstLine)
+        case "queue-operation":
+            let parts = [
+                raw["operation"]?.stringValue,
+                raw["content"]?.stringValue.map(firstLine),
+            ].compactMap { $0 }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        case "file-history-snapshot":
+            return raw["messageId"]?.stringValue
+        case "file-history-delta":
+            return raw["trackingPath"]?.stringValue.map(abbreviatePath)
+        default:
+            let plumbing: Set<String> = ["type", "sessionId", "leafUuid", "timestamp"]
+            guard let fields = raw.objectValue else { return nil }
+            for key in fields.keys.sorted() where !plumbing.contains(key) {
+                switch fields[key] {
+                case .string(let s):
+                    return "\(key): \"\(firstLine(s))\""
+                case .bool(let b):
+                    return "\(key): \(b)"
+                case .integer(let i):
+                    return "\(key): \(i)"
+                case .number(let n):
+                    return "\(key): \(n)"
+                default:
+                    continue
+                }
+            }
+            return nil
+        }
+    }
+
     static func humanize(_ label: String) -> String {
         guard label.contains("_") || label.contains("-") else {
             return sentenceCase(label)

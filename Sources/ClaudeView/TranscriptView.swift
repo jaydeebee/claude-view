@@ -58,6 +58,9 @@ private struct TranscriptLoadedView: View {
     @State private var expansionOverrides: [String: Bool] = [:]
     @State private var turnOverrides: [String: Bool] = [:]
     @State private var follow = true
+    /// Clean rendering hides the harness's bookkeeping; this switch is
+    /// the other need — exposure to the internals, the file's full truth.
+    @AppStorage("showInternals") private var showInternals = false
     @State private var inspectedEntry: TranscriptEntry?
     /// Rows not in this set arrived after the view opened — they fade in.
     /// Identity-based: filtered rows shift indices, ids never lie.
@@ -93,12 +96,18 @@ private struct TranscriptLoadedView: View {
             }
             .onAppear {
                 if initialRowIds == nil {
-                    initialRowIds = Set(displayRows.map(\.id))
+                    // Seed from ALL rows, not just the displayed ones —
+                    // flipping the internals switch reveals old rows, and
+                    // old rows don't fade in like fresh arrivals.
+                    initialRowIds = Set(model.snapshot.rows.map(\.id))
                 }
                 scrollToEnd(proxy: proxy, animated: false)
             }
         }
         .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                internalsToggle
+            }
             ToolbarItem(placement: .primaryAction) {
                 followToggle
             }
@@ -109,15 +118,19 @@ private struct TranscriptLoadedView: View {
         .navigationTitle(model.snapshot.title ?? String(ref.sessionId.prefix(8)))
     }
 
-    /// Empty thinking rows carry no information after the fact — show one
-    /// only while it is the live frontier ("thinking right now"). Thinking
-    /// with actual text (should any harness ever store it) always shows.
+    /// Clean rendering hides bookkeeping sidecars and spent empty-thinking
+    /// markers (an empty thinking row shows only while it is the live
+    /// frontier — "thinking right now"). The internals switch shows it
+    /// all. Thinking with actual text always shows.
     private var displayRows: [SessionRow] {
         let rows = model.snapshot.rows
         let lastId = rows.last?.id
         return rows.filter { row in
+            if case .bookkeeping = row {
+                return showInternals
+            }
             if case .thinking(_, let text) = row, text.isEmpty {
-                return isLive && row.id == lastId
+                return showInternals || (isLive && row.id == lastId)
             }
             return true
         }
@@ -211,6 +224,7 @@ private struct TranscriptLoadedView: View {
         case .console: "console"
         case .taskNotification: "notification"
         case .info: "info"
+        case .bookkeeping: "bookkeeping"
         case .unknown: "unknown"
         }
     }
@@ -253,6 +267,13 @@ private struct TranscriptLoadedView: View {
         .help("Keep scrolled to the newest activity")
     }
 
+    private var internalsToggle: some View {
+        Toggle(isOn: $showInternals) {
+            Label("Internals", systemImage: "curlybraces")
+        }
+        .help("Show the transcript's bookkeeping entries — mode stamps, latches, checkpoints")
+    }
+
     private var rowContext: RowContext {
         RowContext(
             paths: model.paths,
@@ -293,11 +314,12 @@ private struct TranscriptLoadedView: View {
     }
 
     /// The frontier is the last row that says something — a trailing empty
-    /// thinking marker doesn't count, so the tool call before it stays open
-    /// while the model thinks about its result.
+    /// thinking marker or bookkeeping stamp doesn't count, so the tool
+    /// call before it stays open while the model thinks about its result.
     private var frontierRowId: String? {
         model.snapshot.rows.last(where: { row in
             if case .thinking(_, let text) = row, text.isEmpty { return false }
+            if case .bookkeeping = row { return false }
             return true
         })?.id
     }
@@ -315,7 +337,7 @@ private struct TranscriptLoadedView: View {
             return (data.isPending && isLive) || isMostRecent
         case .thinking, .taskNotification:
             return isMostRecent
-        case .info, .unknown:
+        case .info, .bookkeeping, .unknown:
             return false
         }
     }

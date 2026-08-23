@@ -22,7 +22,7 @@ import Testing
     @Test func pairsToolResultIntoItsCallRow() throws {
         let snapshot = SessionAssembler().assemble(entries: try entries(conversation))
 
-        #expect(snapshot.rows.count == 4)
+        #expect(snapshot.rows.count == 5)
         guard case .prompt(_, let prompt) = snapshot.rows[0] else {
             Issue.record("row 0 should be the prompt")
             return
@@ -43,6 +43,10 @@ import Testing
             ContentBlock.flattenedText(of: call.resultContent ?? .null).contains("func foo"))
         guard case .assistantText = snapshot.rows[3] else {
             Issue.record("row 3 should be assistant text")
+            return
+        }
+        guard case .bookkeeping = snapshot.rows[4] else {
+            Issue.record("row 4 should be the ai-title bookkeeping stamp")
             return
         }
     }
@@ -85,7 +89,10 @@ import Testing
         #expect(b.resultContent?.stringValue == "b done")
     }
 
-    @Test func sidecarsBecomeHeaderStateNotRows() throws {
+    /// Sidecars feed the header AND stay behind as bookkeeping rows —
+    /// hidden by default, shown by the internals switch. Nothing the
+    /// file holds is lost at assembly time.
+    @Test func sidecarsFoldIntoHeaderAndRemainAsBookkeeping() throws {
         let lines = [
             Fixtures.aiTitle,
             #"{"type":"mode","mode":"normal","sessionId":"s"}"#,
@@ -94,11 +101,39 @@ import Testing
             #"{"type":"queue-operation","operation":"enqueue","content":"queued","sessionId":"s","timestamp":"2026-08-22T15:00:00Z"}"#,
         ]
         let snapshot = SessionAssembler().assemble(entries: try entries(lines))
-        #expect(snapshot.rows.isEmpty)
+        #expect(snapshot.rows.count == lines.count)
+        for row in snapshot.rows {
+            guard case .bookkeeping = row else {
+                Issue.record("expected only bookkeeping rows, got \(row)")
+                return
+            }
+        }
         #expect(snapshot.title == "Fix foo.swift loop bounds")
         #expect(snapshot.mode == "normal")
         #expect(snapshot.permissionMode == "acceptEdits")
         #expect(snapshot.lastPrompt == "do the thing")
+    }
+
+    /// Conversation entries always carry a uuid; sidecars never do. An
+    /// unknown type without one (atis-latch, or whatever ships next) is
+    /// bookkeeping; an unknown type WITH one is conversation content and
+    /// keeps its loud unrecognized-entry row.
+    @Test func unknownSidecarsAreBookkeepingUnknownContentIsNot() throws {
+        let lines = [
+            #"{"type":"atis-latch","atis":"","sessionId":"s"}"#,
+            Fixtures.mysteryEntry,
+        ]
+        let snapshot = SessionAssembler().assemble(entries: try entries(lines))
+        #expect(snapshot.rows.count == 2)
+        guard case .bookkeeping(let sidecar) = snapshot.rows[0] else {
+            Issue.record("uuid-less unknown should be bookkeeping")
+            return
+        }
+        #expect(sidecar.raw["type"]?.stringValue == "atis-latch")
+        guard case .unknown = snapshot.rows[1] else {
+            Issue.record("unknown entry with a uuid should stay unknown")
+            return
+        }
     }
 
     @Test func metaAndSystemAndUnknownBecomeInfoRows() throws {

@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct ClaudeViewApp: App {
     @State private var updates = UpdateController()
+    @AppStorage("showInternals") private var showInternals = false
 
     init() {
         // When run as a bare SPM executable there is no bundle to declare us a
@@ -24,6 +25,10 @@ struct ClaudeViewApp: App {
                 Toggle(
                     "Check for Updates Automatically",
                     isOn: Bindable(updates).automaticChecksEnabled)
+            }
+            CommandGroup(before: .toolbar) {
+                Toggle("Show Internals", isOn: $showInternals)
+                    .keyboardShortcut("i", modifiers: [.command, .shift])
             }
         }
     }

@@ -87,6 +87,27 @@ struct TranscriptRowView: View {
                     .fill(
                         entry.subtype == "turn_duration"
                             ? Color.green.opacity(0.09) : Color.clear))
+        case .bookkeeping(let entry):
+            // The internals lane: session-state stamps the clean rendering
+            // hides. Dimmer than info rows — machinery, not conversation.
+            CollapsibleRow(isExpanded: $isExpanded) {
+                Image(systemName: "gearshape")
+                    .font(.caption)
+                    .foregroundStyle(.quaternary)
+                Text(InfoPresentation.humanize(
+                    entry.raw["type"]?.stringValue ?? "sidecar"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                if let detail = InfoPresentation.bookkeepingDetail(for: entry) {
+                    Text(detail)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.quaternary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            } content: {
+                RawEntryView(entry: entry)
+            }
         case .unknown(let entry):
             CollapsibleRow(isExpanded: $isExpanded) {
                 Label(
