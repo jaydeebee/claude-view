@@ -56,6 +56,7 @@ private struct TranscriptLoadedView: View {
     let onOpenSession: (SessionRef) -> Void
 
     @State private var expansionOverrides: [String: Bool] = [:]
+    @State private var turnOverrides: [String: Bool] = [:]
     @State private var follow = true
     @State private var inspectedEntry: TranscriptEntry?
     /// Rows not in this set arrived after the view opened — they fade in.
@@ -123,7 +124,34 @@ private struct TranscriptLoadedView: View {
     }
 
     @ViewBuilder private var rowViews: some View {
-        let rows = displayRows
+        let groups = turnGroups
+        ForEach(groups) { turn in
+            if let promptText = turn.promptText {
+                NewRowFade(isNew: isNewRowId(turn.id)) {
+                    TurnHeaderView(
+                        text: promptText,
+                        isExpanded: isTurnExpanded(turn, total: groups.count),
+                        stepCount: turn.rows.count,
+                        durationText: turn.durationText,
+                        onToggle: {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                turnOverrides[turn.id] =
+                                    !isTurnExpanded(turn, total: groups.count)
+                            }
+                        })
+                }
+                .padding(.top, 3)
+                .id(turn.id)
+                if isTurnExpanded(turn, total: groups.count) {
+                    turnRows(turn.rows)
+                }
+            } else {
+                turnRows(turn.rows)
+            }
+        }
+    }
+
+    @ViewBuilder private func turnRows(_ rows: [SessionRow]) -> some View {
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
             NewRowFade(isNew: isNewRow(row)) {
                 TranscriptRowView(
@@ -136,6 +164,41 @@ private struct TranscriptLoadedView: View {
             .padding(.top, index > 0 && rowFamily(rows[index - 1]) == rowFamily(row) ? 0 : 3)
             .id(row.id)
         }
+    }
+
+    // MARK: Turns
+
+    /// Rows grouped by the prompt that elicited them. Rows before the first
+    /// prompt (session preamble) render flat.
+    private var turnGroups: [TurnGroup] {
+        var groups: [TurnGroup] = []
+        var current = TurnGroup(id: "preamble", index: 0, promptText: nil, rows: [])
+        for row in displayRows {
+            if case .prompt(_, let text) = row {
+                if current.promptText != nil || !current.rows.isEmpty {
+                    groups.append(current)
+                }
+                current = TurnGroup(
+                    id: row.id, index: groups.count, promptText: text, rows: [])
+            } else {
+                current.rows.append(row)
+            }
+        }
+        if current.promptText != nil || !current.rows.isEmpty {
+            groups.append(current)
+        }
+        return groups
+    }
+
+    /// The last two turns stay open; older history folds to its prompts.
+    /// A manual toggle wins until the session is reselected.
+    private func isTurnExpanded(_ turn: TurnGroup, total: Int) -> Bool {
+        turnOverrides[turn.id] ?? (turn.index >= total - 2)
+    }
+
+    private func isNewRowId(_ id: String) -> Bool {
+        guard let initialRowIds else { return false }
+        return !initialRowIds.contains(id)
     }
 
     private func rowFamily(_ row: SessionRow) -> String {
@@ -308,5 +371,84 @@ struct PulseBar: View {
             .onAppear {
                 bright = true
             }
+    }
+}
+
+/// One prompt and everything it elicited, up to the next prompt.
+private struct TurnGroup: Identifiable {
+    let id: String
+    let index: Int
+    let promptText: String?
+    var rows: [SessionRow] = []
+
+    var durationText: String? {
+        for row in rows {
+            if case .info(let entry, _) = row, entry.subtype == "turn_duration" {
+                return InfoPresentation.display(for: entry, fallback: "").detail
+            }
+        }
+        return nil
+    }
+}
+
+/// The prompt card doubling as the turn's disclosure: collapsed it
+/// previews the first lines of the question plus the turn's vitals;
+/// expanded it is the full prompt with the turn's rows beneath.
+private struct TurnHeaderView: View {
+    let text: String
+    let isExpanded: Bool
+    let stepCount: Int
+    let durationText: String?
+    let onToggle: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 6) {
+            Button(action: onToggle) {
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .padding(.top, 14)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            card
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder private var card: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("❯")
+                    .font(.body.weight(.bold).monospaced())
+                    .foregroundStyle(Color.accentColor)
+                if isExpanded {
+                    MarkdownText(text: text)
+                } else {
+                    Text(text)
+                        .lineLimit(2)
+                }
+            }
+            if !isExpanded {
+                Text(
+                    "\(stepCount) step\(stepCount == 1 ? "" : "s")"
+                        + (durationText.map { " · \($0)" } ?? "")
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.leading, 20)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.accentColor.opacity(0.08)))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if !isExpanded { onToggle() }
+        }
     }
 }
