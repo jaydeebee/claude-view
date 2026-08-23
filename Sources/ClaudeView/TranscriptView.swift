@@ -105,10 +105,10 @@ private struct TranscriptLoadedView: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+            // One group: the detail scale sits hard against the follow
+            // toggle instead of drifting wherever the toolbar pleases.
+            ToolbarItemGroup(placement: .primaryAction) {
                 detailPicker
-            }
-            ToolbarItem(placement: .primaryAction) {
                 followToggle
             }
         }
@@ -280,6 +280,7 @@ private struct TranscriptLoadedView: View {
             }
         }
         .pickerStyle(.segmented)
+        .labelStyle(.iconOnly)
         .help(
             "Conversation: the visible work. Context: plus what the harness "
                 + "whispers to the model. Everything: plus session-state sidecars.")
