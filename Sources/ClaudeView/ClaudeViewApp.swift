@@ -4,7 +4,7 @@ import SwiftUI
 @main
 struct ClaudeViewApp: App {
     @State private var updates = UpdateController()
-    @AppStorage("showInternals") private var showInternals = false
+    @AppStorage("transcriptDetail") private var detail: DetailLevel = .conversation
 
     init() {
         // When run as a bare SPM executable there is no bundle to declare us a
@@ -27,8 +27,17 @@ struct ClaudeViewApp: App {
                     isOn: Bindable(updates).automaticChecksEnabled)
             }
             CommandGroup(before: .toolbar) {
-                Toggle("Show Internals", isOn: $showInternals)
-                    .keyboardShortcut("i", modifiers: [.command, .shift])
+                Picker("Transcript Detail", selection: $detail) {
+                    Text("Conversation")
+                        .tag(DetailLevel.conversation)
+                        .keyboardShortcut("1", modifiers: [.command, .shift])
+                    Text("Context")
+                        .tag(DetailLevel.context)
+                        .keyboardShortcut("2", modifiers: [.command, .shift])
+                    Text("Everything")
+                        .tag(DetailLevel.everything)
+                        .keyboardShortcut("3", modifiers: [.command, .shift])
+                }
             }
         }
     }

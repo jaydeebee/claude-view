@@ -38,6 +38,10 @@ enum InfoPresentation {
             return firstLine(prompt)
         case "date_change":
             return payload["newDate"]?.stringValue
+        case "total_tokens_reminder":
+            return payload["text"]?.stringValue.flatMap {
+                LocalCommandMarkup.tagContent("total_tokens", in: $0)
+            }
         case "task_reminder":
             if let count = payload["itemCount"]?.intValue, count > 0 {
                 return "\(count) open task\(count == 1 ? "" : "s")"

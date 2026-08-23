@@ -58,9 +58,9 @@ private struct TranscriptLoadedView: View {
     @State private var expansionOverrides: [String: Bool] = [:]
     @State private var turnOverrides: [String: Bool] = [:]
     @State private var follow = true
-    /// Clean rendering hides the harness's bookkeeping; this switch is
-    /// the other need — exposure to the internals, the file's full truth.
-    @AppStorage("showInternals") private var showInternals = false
+    /// Clean rendering and exposure to internals are different needs —
+    /// a sliding scale serves both, plus the stop in between.
+    @AppStorage("transcriptDetail") private var detail: DetailLevel = .conversation
     @State private var inspectedEntry: TranscriptEntry?
     /// Rows not in this set arrived after the view opened — they fade in.
     /// Identity-based: filtered rows shift indices, ids never lie.
@@ -106,7 +106,7 @@ private struct TranscriptLoadedView: View {
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                internalsToggle
+                detailPicker
             }
             ToolbarItem(placement: .primaryAction) {
                 followToggle
@@ -118,21 +118,19 @@ private struct TranscriptLoadedView: View {
         .navigationTitle(model.snapshot.title ?? String(ref.sessionId.prefix(8)))
     }
 
-    /// Clean rendering hides bookkeeping sidecars and spent empty-thinking
-    /// markers (an empty thinking row shows only while it is the live
-    /// frontier — "thinking right now"). The internals switch shows it
-    /// all. Thinking with actual text always shows.
+    /// Each row shows from its floor level up. One exception rides on
+    /// top: an empty thinking row (floor Everything, since it carries
+    /// nothing after the fact) still shows at any level while it is the
+    /// live frontier — "thinking right now".
     private var displayRows: [SessionRow] {
         let rows = model.snapshot.rows
         let lastId = rows.last?.id
         return rows.filter { row in
-            if case .bookkeeping = row {
-                return showInternals
-            }
+            if detail.shows(DetailLevel.floor(for: row)) { return true }
             if case .thinking(_, let text) = row, text.isEmpty {
-                return showInternals || (isLive && row.id == lastId)
+                return isLive && row.id == lastId
             }
-            return true
+            return false
         }
     }
 
@@ -251,6 +249,13 @@ private struct TranscriptLoadedView: View {
             Text("\(model.snapshot.entryCount) entries")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
+            // The context-budget gauge: the harness's last total_tokens
+            // reminder, promoted from nag row to metadata.
+            if let tokensLeft = model.snapshot.tokensLeft {
+                Text("\(Self.compactTokens(tokensLeft)) tokens left")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
             Spacer()
             Text(ref.sessionId)
                 .font(.caption2.monospaced())
@@ -267,11 +272,17 @@ private struct TranscriptLoadedView: View {
         .help("Keep scrolled to the newest activity")
     }
 
-    private var internalsToggle: some View {
-        Toggle(isOn: $showInternals) {
-            Label("Internals", systemImage: "curlybraces")
+    private var detailPicker: some View {
+        Picker("Detail", selection: $detail) {
+            ForEach(DetailLevel.allCases) { level in
+                Label(level.title, systemImage: level.symbol)
+                    .tag(level)
+            }
         }
-        .help("Show the transcript's bookkeeping entries — mode stamps, latches, checkpoints")
+        .pickerStyle(.segmented)
+        .help(
+            "Conversation: the visible work. Context: plus what the harness "
+                + "whispers to the model. Everything: plus session-state sidecars.")
     }
 
     private var rowContext: RowContext {
@@ -286,6 +297,17 @@ private struct TranscriptLoadedView: View {
     private func isNewRow(_ row: SessionRow) -> Bool {
         guard let initialRowIds else { return false }
         return !initialRowIds.contains(row.id)
+    }
+
+    private static func compactTokens(_ n: Int64) -> String {
+        switch n {
+        case 1_000_000...:
+            return String(format: "%.1fM", Double(n) / 1_000_000)
+        case 10_000...:
+            return "\(n / 1_000)k"
+        default:
+            return "\(n)"
+        }
     }
 
     private func scrollToEnd(proxy: ScrollViewProxy, animated: Bool = true) {

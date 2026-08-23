@@ -204,6 +204,16 @@ import Testing
         #expect(call.subagent?.transcriptURL.lastPathComponent == "agent-abc123.jsonl")
     }
 
+    @Test func totalTokensReminderFeedsTheBudgetGauge() throws {
+        let lines = [
+            #"{"type":"attachment","uuid":"at-t1","attachment":{"type":"total_tokens_reminder","text":"<total_tokens>15000000 tokens left</total_tokens>"}}"#,
+            #"{"type":"attachment","uuid":"at-t2","attachment":{"type":"total_tokens_reminder","text":"<total_tokens>14945309 tokens left</total_tokens>"}}"#,
+        ]
+        let snapshot = SessionAssembler().assemble(entries: try entries(lines))
+        #expect(snapshot.tokensLeft == 14_945_309)  // last wins
+        #expect(snapshot.rows.count == 2)  // the rows themselves remain
+    }
+
     @Test func titleFallsBackToFirstPrompt() throws {
         let snapshot = SessionAssembler().assemble(
             entries: try entries([Fixtures.userPrompt]))

@@ -176,6 +176,9 @@ public struct SessionSnapshot: Sendable {
     public var lastPrompt: String?
     public var mode: String?
     public var permissionMode: String?
+    /// Latest total_tokens_reminder value — the context budget remaining,
+    /// as the harness last reported it to the model.
+    public var tokensLeft: Int64?
     public var rows: [SessionRow] = []
     public var entryCount = 0
 
@@ -232,6 +235,9 @@ public struct SessionAssembler: Sendable {
             case .attachment:
                 markCompletedForks(entry, in: &snapshot, openForks: &openForks)
                 let label = entry.raw["attachment"]?["type"]?.stringValue ?? "attachment"
+                if label == "total_tokens_reminder" {
+                    snapshot.tokensLeft = tokensLeft(of: entry) ?? snapshot.tokensLeft
+                }
                 snapshot.rows.append(.info(entry, label: label))
             case .user:
                 appendUserRows(
@@ -386,6 +392,15 @@ public struct SessionAssembler: Sendable {
         }
 
         return false
+    }
+
+    /// "<total_tokens>14945309 tokens left</total_tokens>" → 14945309.
+    private func tokensLeft(of entry: TranscriptEntry) -> Int64? {
+        guard let text = entry.raw["attachment"]?["text"]?.stringValue,
+            let inner = LocalCommandMarkup.tagContent("total_tokens", in: text)
+        else { return nil }
+        let digits = inner.trimmingCharacters(in: .whitespaces).prefix(while: \.isNumber)
+        return Int64(digits)
     }
 
     private func trimmedTag(_ tag: String, in text: String) -> String? {
