@@ -16,8 +16,7 @@ struct SidebarView: View {
                         LiveSessionRow(session: live.session)
                             .tag(live.ref)
                         ForEach(model.sidebarAgents(for: live.ref)) { agent in
-                            ActiveSubagentRow(agent: agent)
-                                .tag(agent.ref)
+                            AgentTreeRow(agent: agent)
                         }
                     }
                 }
@@ -116,8 +115,34 @@ struct HistorySessionRow: View {
     }
 }
 
+/// One node of the agent tree. Agents with children render as a
+/// disclosure, collapsed by default — code-review shows; its dozen
+/// Explore finders wait behind the chevron.
+struct AgentTreeRow: View {
+    let agent: ActiveSubagent
+
+    @State private var isExpanded = false
+
+    var body: some View {
+        if agent.children.isEmpty {
+            ActiveSubagentRow(agent: agent, state: agent.state)
+                .tag(agent.ref)
+        } else {
+            DisclosureGroup(isExpanded: $isExpanded) {
+                ForEach(agent.children) { child in
+                    AgentTreeRow(agent: child)
+                }
+            } label: {
+                ActiveSubagentRow(agent: agent, state: agent.aggregateState)
+                    .tag(agent.ref)
+            }
+        }
+    }
+}
+
 struct ActiveSubagentRow: View {
     let agent: ActiveSubagent
+    let state: ActiveSubagent.State
 
     var body: some View {
         HStack(spacing: 6) {
@@ -142,7 +167,7 @@ struct ActiveSubagentRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            switch agent.state {
+            switch state {
             case .processing:
                 ProgressView()
                     .controlSize(.mini)
@@ -152,8 +177,7 @@ struct ActiveSubagentRow: View {
                 Circle().fill(Color.secondary.opacity(0.4)).frame(width: 6, height: 6)
             }
         }
-        .opacity(agent.state == .inactive ? 0.55 : 1)
-        .padding(.leading, 16 + CGFloat(agent.depth) * 14)
+        .opacity(state == .inactive ? 0.55 : 1)
         .padding(.vertical, 1)
     }
 }

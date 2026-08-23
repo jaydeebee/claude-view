@@ -118,10 +118,10 @@ final class AppModel {
 /// inferred from transcript freshness.
 struct ActiveSubagent: Identifiable {
     /// The usual indicators: spinner, orange for idle, dimmed when done.
-    enum State {
-        case processing  // transcript written in the last 30s
-        case idle        // recent activity, not writing right now
-        case inactive    // quiet for 10+ minutes
+    enum State: Int {
+        case inactive = 0  // quiet for 10+ minutes
+        case idle = 1      // recent activity, not writing right now
+        case processing = 2  // transcript written in the last 30s
     }
 
     let ref: SessionRef
@@ -129,8 +129,7 @@ struct ActiveSubagent: Identifiable {
     let detail: String?
     let startedAt: Date?
     let lastActivity: Date
-    /// 0 = spawned by the session; 1+ = spawned by another agent.
-    let depth: Int
+    var children: [ActiveSubagent] = []
 
     var state: State {
         if lastActivity.timeIntervalSinceNow > -30 { return .processing }
@@ -138,36 +137,43 @@ struct ActiveSubagent: Identifiable {
         return .inactive
     }
 
+    /// What a collapsed parent shows: its own state or its busiest
+    /// descendant's, whichever is more alive — code-review often idles
+    /// while its finders work.
+    var aggregateState: State {
+        children.reduce(state) { max($0, $1.aggregateState) }
+    }
+
     var id: String { ref.sessionId }
 }
 
+extension ActiveSubagent.State: Comparable {
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
 extension AppModel {
-    /// The complete agent tree for one live session, children indented
-    /// under the agent that spawned them. State (processing/idle/inactive)
-    /// conveys age; the filter toggle prunes the inactive.
-    func activeSubagents(for parent: SessionRef) -> [ActiveSubagent] {
+    /// The complete agent tree for one live session: children nested under
+    /// the agent that spawned them, oldest first.
+    func agentTree(for parent: SessionRef) -> [ActiveSubagent] {
         let dir = paths.subagentsDir(
             projectSlug: parent.projectSlug, sessionId: parent.sessionId)
         let index = SubagentIndex.load(dir: dir)
         let byParent = Dictionary(
             grouping: index.byAgentId.values, by: { $0.parentAgentId })
-
-        var out: [ActiveSubagent] = []
         var visited = Set<String>()
 
-        func append(parentAgentId: String?, depth: Int) {
-            guard depth < 4 else { return }
-            let group = (byParent[parentAgentId] ?? [])
+        func build(parentAgentId: String?, depth: Int) -> [ActiveSubagent] {
+            guard depth < 4 else { return [] }
+            return (byParent[parentAgentId] ?? [])
                 .compactMap { agent -> (SubagentRef, Date?, Date)? in
+                    guard visited.insert(agent.agentId).inserted else { return nil }
                     let values = try? agent.transcriptURL.resourceValues(
                         forKeys: [.creationDateKey, .contentModificationDateKey])
                     return (agent, values?.creationDate,
                             values?.contentModificationDate ?? .distantPast)
                 }
                 .sorted { ($0.1 ?? .distantPast) < ($1.1 ?? .distantPast) }
-            for (agent, created, mtime) in group {
-                guard visited.insert(agent.agentId).inserted else { continue }
-                out.append(
+                .map { agent, created, mtime in
                     ActiveSubagent(
                         ref: SessionRef(
                             projectSlug: parent.projectSlug,
@@ -178,19 +184,25 @@ extension AppModel {
                         detail: agent.taskDescription,
                         startedAt: created,
                         lastActivity: mtime,
-                        depth: depth))
-                append(parentAgentId: agent.agentId, depth: depth + 1)
-            }
+                        children: build(parentAgentId: agent.agentId, depth: depth + 1))
+                }
         }
-        append(parentAgentId: nil, depth: 0)
-        return out
+        return build(parentAgentId: nil, depth: 0)
     }
 
-    /// What the sidebar lists: everything, or only the not-yet-inactive.
+    /// What the sidebar lists: everything, or — filtered — only agents that
+    /// are still active or shelter an active descendant.
     func sidebarAgents(for parent: SessionRef) -> [ActiveSubagent] {
-        let agents = activeSubagents(for: parent)
-        guard agentFilterRunningOnly else { return agents }
-        return agents.filter { $0.state != .inactive }
+        let tree = agentTree(for: parent)
+        guard agentFilterRunningOnly else { return tree }
+        func prune(_ agents: [ActiveSubagent]) -> [ActiveSubagent] {
+            agents.compactMap { agent in
+                var kept = agent
+                kept.children = prune(agent.children)
+                return kept.state != .inactive || !kept.children.isEmpty ? kept : nil
+            }
+        }
+        return prune(tree)
     }
 
     /// Liveness/busyness for whatever the detail pane is showing. Sessions
@@ -210,7 +222,7 @@ extension AppModel {
     }
 
     /// FSEvents drives refresh while files change; this slow heartbeat lets
-    /// quiet-again subagents age out of the sidebar.
+    /// agent states age in the sidebar.
     func startHeartbeat() {
         Task { @MainActor [weak self] in
             while let self, !Task.isCancelled {
