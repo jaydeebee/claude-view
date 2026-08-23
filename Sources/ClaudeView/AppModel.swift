@@ -111,45 +111,84 @@ final class AppModel {
     }
 }
 
-/// A subagent currently doing work for a live session — surfaced in the
-/// sidebar tree under its parent. Background forks never appear in the
-/// session registry, so activity is inferred from transcript freshness.
+/// An agent under a live session, surfaced in the sidebar tree. Background
+/// agents never appear in the session registry, so running-ness is
+/// inferred from transcript freshness.
 struct ActiveSubagent: Identifiable {
     let ref: SessionRef
     let title: String
     let detail: String?
+    let startedAt: Date?
+    let lastActivity: Date
+    /// 0 = spawned by the session; 1+ = spawned by another agent.
+    let depth: Int
 
+    var isRunning: Bool { lastActivity.timeIntervalSinceNow > -30 }
     var id: String { ref.sessionId }
 }
 
 extension AppModel {
-    /// Top-level agents (not agents-of-agents) whose transcript was written
-    /// to in the last couple of minutes.
+    /// The agent tree for one live session: agents active in the last two
+    /// hours, children indented under the agent that spawned them. Older
+    /// runs stay reachable forever through their launch rows in the
+    /// transcript; the sidebar is the "recent and running" view.
     func activeSubagents(for parent: SessionRef) -> [ActiveSubagent] {
         let dir = paths.subagentsDir(
             projectSlug: parent.projectSlug, sessionId: parent.sessionId)
         let index = SubagentIndex.load(dir: dir)
-        let cutoff = Date().addingTimeInterval(-120)
+        let cutoff = Date().addingTimeInterval(-7200)
+        let byParent = Dictionary(
+            grouping: index.byAgentId.values, by: { $0.parentAgentId })
 
-        return index.byAgentId.values
-            .filter { $0.parentAgentId == nil }
-            .compactMap { agent -> (SubagentRef, Date)? in
-                let mtime = (try? agent.transcriptURL.resourceValues(
-                    forKeys: [.contentModificationDateKey]))?.contentModificationDate
-                guard let mtime, mtime > cutoff else { return nil }
-                return (agent, mtime)
+        var out: [ActiveSubagent] = []
+        var visited = Set<String>()
+
+        func append(parentAgentId: String?, depth: Int) {
+            guard depth < 4 else { return }
+            let group = (byParent[parentAgentId] ?? [])
+                .compactMap { agent -> (SubagentRef, Date?, Date)? in
+                    let values = try? agent.transcriptURL.resourceValues(
+                        forKeys: [.creationDateKey, .contentModificationDateKey])
+                    guard let mtime = values?.contentModificationDate, mtime > cutoff
+                    else { return nil }
+                    return (agent, values?.creationDate, mtime)
+                }
+                .sorted { ($0.1 ?? .distantPast) < ($1.1 ?? .distantPast) }
+            for (agent, created, mtime) in group {
+                guard visited.insert(agent.agentId).inserted else { continue }
+                out.append(
+                    ActiveSubagent(
+                        ref: SessionRef(
+                            projectSlug: parent.projectSlug,
+                            sessionId: "agent-\(agent.agentId)",
+                            url: agent.transcriptURL,
+                            subagentsDir: dir),
+                        title: agent.name ?? agent.agentType ?? "agent",
+                        detail: agent.taskDescription,
+                        startedAt: created,
+                        lastActivity: mtime,
+                        depth: depth))
+                append(parentAgentId: agent.agentId, depth: depth + 1)
             }
-            .sorted { $0.1 > $1.1 }
-            .map { agent, _ in
-                ActiveSubagent(
-                    ref: SessionRef(
-                        projectSlug: parent.projectSlug,
-                        sessionId: "agent-\(agent.agentId)",
-                        url: agent.transcriptURL,
-                        subagentsDir: dir),
-                    title: agent.name ?? agent.agentType ?? "agent",
-                    detail: agent.taskDescription)
-            }
+        }
+        append(parentAgentId: nil, depth: 0)
+        return out
+    }
+
+    /// Liveness/busyness for whatever the detail pane is showing. Sessions
+    /// answer from the registry; agents answer from parent liveness plus
+    /// their own transcript freshness.
+    func status(for ref: SessionRef) -> (live: Bool, busy: Bool) {
+        if let dir = ref.subagentsDir {
+            let parentSessionId = dir.deletingLastPathComponent().lastPathComponent
+            let live = liveSessions.contains { $0.sessionId == parentSessionId }
+            let mtime = (try? ref.url.resourceValues(
+                forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            let busy = live && (mtime.map { $0.timeIntervalSinceNow > -20 } ?? false)
+            return (live, busy)
+        }
+        let live = liveRefs.first { $0.ref == ref }
+        return (live != nil, live?.session.status == "busy")
     }
 
     /// FSEvents drives refresh while files change; this slow heartbeat lets

@@ -8,6 +8,7 @@ struct TranscriptView: View {
     let paths: ClaudePaths
     let isLive: Bool
     let isBusy: Bool
+    let onOpenSession: (SessionRef) -> Void
 
     @State private var model: TranscriptModel?
 
@@ -17,7 +18,8 @@ struct TranscriptView: View {
             // still in state for a frame — never render it under a new ref.
             if let model, model.ref == ref {
                 TranscriptLoadedView(
-                    model: model, ref: ref, isLive: isLive, isBusy: isBusy
+                    model: model, ref: ref, isLive: isLive, isBusy: isBusy,
+                    onOpenSession: onOpenSession
                 )
                 // Per-session view state (expansion, follow, newness) resets
                 // when another session is selected.
@@ -51,6 +53,7 @@ private struct TranscriptLoadedView: View {
     let ref: SessionRef
     let isLive: Bool
     let isBusy: Bool
+    let onOpenSession: (SessionRef) -> Void
 
     @State private var expansionOverrides: [String: Bool] = [:]
     @State private var follow = true
@@ -190,8 +193,8 @@ private struct TranscriptLoadedView: View {
             paths: model.paths,
             sessionRef: ref,
             isLive: isLive,
-            depth: 0,
-            onInspect: { inspectedEntry = $0 })
+            onInspect: { inspectedEntry = $0 },
+            onOpenSession: onOpenSession)
     }
 
     private func isNewRow(_ row: SessionRow) -> Bool {

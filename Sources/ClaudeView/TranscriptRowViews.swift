@@ -177,10 +177,10 @@ struct ToolCallRowView: View {
         } content: {
             VStack(alignment: .leading, spacing: 8) {
                 inputSection
-                if let subagent = call.subagent, context.depth < RowContext.maxDepth {
-                    SubSessionView(
+                if let subagent = call.subagent {
+                    SubSessionLinkView(
                         subagent: subagent,
-                        agentIsRunning: call.isPending && context.isLive,
+                        isActive: call.isPending && context.isLive,
                         context: context)
                 }
                 if !call.isPending {
@@ -342,12 +342,12 @@ struct ForkLaunchRowView: View {
             }
         } content: {
             Group {
-                if let subagent = fork.subagent, context.depth < RowContext.maxDepth {
-                    SubSessionView(
+                if let subagent = fork.subagent {
+                    SubSessionLinkView(
                         subagent: subagent,
-                        agentIsRunning: fork.isPending && context.isLive,
+                        isActive: fork.isPending && context.isLive,
                         context: context)
-                } else if fork.subagent == nil {
+                } else {
                     Text("sub-session transcript not found")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -355,5 +355,58 @@ struct ForkLaunchRowView: View {
             }
             .padding(.leading, 22)
         }
+    }
+}
+
+/// An agent's stream is a session of its own — this is the doorway, not
+/// the room. Click to open it full-pane; the sidebar highlights it there.
+struct SubSessionLinkView: View {
+    let subagent: SubagentRef
+    let isActive: Bool
+    let context: RowContext
+
+    var body: some View {
+        Button {
+            context.onOpenSession(
+                SessionRef(
+                    projectSlug: context.sessionRef.projectSlug,
+                    sessionId: "agent-\(subagent.agentId)",
+                    url: subagent.transcriptURL,
+                    subagentsDir: subagent.transcriptURL.deletingLastPathComponent()))
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.branch")
+                    .font(.caption)
+                    .foregroundStyle(.purple)
+                Text(subagent.name ?? subagent.agentType ?? "agent")
+                    .font(.subheadline.weight(.semibold))
+                if let description = subagent.taskDescription {
+                    Text(description)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                if isActive {
+                    ProgressView()
+                        .controlSize(.mini)
+                    Text("running")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(.purple.opacity(0.07)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open this sub-session")
     }
 }

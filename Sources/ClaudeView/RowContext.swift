@@ -1,24 +1,14 @@
 import ClaudeViewCore
 import Foundation
 
-/// What every row needs to know beyond its own data: where it lives, how to
-/// open the inspector, and how deep the sub-session nesting already is.
+/// What every row needs beyond its own data: where it lives, how to open
+/// the inspector, and how to navigate to another session (sub-agent links).
 struct RowContext {
     let paths: ClaudePaths
-    /// The top-level session this row belongs to. Subagent transcripts all
-    /// live in that session's subagents directory, so nested agents resolve
-    /// against the same root.
+    /// The session this row belongs to. Subagent transcripts live in that
+    /// session's subagents directory, so nested agents resolve against it.
     let sessionRef: SessionRef
     let isLive: Bool
-    let depth: Int
     let onInspect: (TranscriptEntry) -> Void
-
-    /// Agents can spawn agents; past this depth we stop inlining streams.
-    static let maxDepth = 3
-
-    func deeper() -> RowContext {
-        RowContext(
-            paths: paths, sessionRef: sessionRef, isLive: isLive,
-            depth: depth + 1, onInspect: onInspect)
-    }
+    let onOpenSession: (SessionRef) -> Void
 }

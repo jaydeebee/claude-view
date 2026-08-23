@@ -111,15 +111,30 @@ struct ActiveSubagentRow: View {
                 Text(agent.title)
                     .font(.callout)
                     .lineLimit(1)
-                if let detail = agent.detail {
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                HStack(spacing: 4) {
+                    if let started = agent.startedAt {
+                        Text(started, format: .dateTime.hour().minute())
+                    }
+                    if let detail = agent.detail {
+                        Text("· " + detail)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if agent.isRunning {
+                ProgressView()
+                    .controlSize(.mini)
+            } else {
+                Text("done")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
         }
-        .padding(.leading, 16)
+        .padding(.leading, 16 + CGFloat(agent.depth) * 14)
         .padding(.vertical, 1)
     }
 }
