@@ -47,4 +47,16 @@ import Testing
             return
         }
     }
+
+    @Test func unparseableVersionsReportUnavailableNotDevelopment() async {
+        // A present-but-unparseable bundle version is a config problem worth
+        // reporting, not a `swift run` development build. Fails before any
+        // networking, so this stays offline.
+        let status = await UpdateCheck.run(
+            currentVersion: "0.3.0b1", owner: "x", repo: "y")
+        guard case .unavailable = status else {
+            Issue.record("expected .unavailable for unparseable version")
+            return
+        }
+    }
 }

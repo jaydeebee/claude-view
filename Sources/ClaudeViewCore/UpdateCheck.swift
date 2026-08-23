@@ -13,9 +13,13 @@ public struct AppVersion: Comparable, Sendable, CustomStringConvertible {
         if let suffix = s.firstIndex(where: { $0 == "-" || $0 == "+" }) {
             s = String(s[..<suffix])
         }
-        let parts = s.split(separator: ".").map { Int($0) }
-        guard !parts.isEmpty, !parts.contains(nil) else { return nil }
-        components = parts.compactMap { $0 }
+        var parsed: [Int] = []
+        for part in s.split(separator: ".") {
+            guard let component = Int(part) else { return nil }
+            parsed.append(component)
+        }
+        guard !parsed.isEmpty else { return nil }
+        components = parsed
     }
 
     /// Missing components count as zero: 1.0 == 1.0.0.
@@ -60,26 +64,42 @@ public struct ReleaseInfo: Sendable {
 public enum UpdateStatus: Sendable {
     /// No bundled version (swift run) — checks don't apply.
     case development
-    case upToDate(AppVersion)
+    case upToDate(current: AppVersion, latest: AppVersion)
     case updateAvailable(ReleaseInfo)
     case unavailable(String)
 }
 
 public enum UpdateCheck {
+    /// A short-fuse, cache-free session: the check is fire-and-forget, so
+    /// don't ride URLSession's default 60-second timeout or write GitHub
+    /// responses into the shared on-disk cache.
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 15
+        return URLSession(configuration: configuration)
+    }()
+
     /// Compares the running version against the latest published GitHub
     /// release. The request carries version strings and nothing else.
     public static func run(
         currentVersion: String?, owner: String, repo: String
     ) async -> UpdateStatus {
-        guard let currentVersion, let current = AppVersion(currentVersion) else {
-            return .development
+        guard let currentVersion else { return .development }
+        guard let current = AppVersion(currentVersion) else {
+            return .unavailable(
+                "The bundled version \"\(currentVersion)\" is not a dotted "
+                    + "numeric version, so it can't be compared with releases.")
         }
-        let url = URL(
-            string: "https://api.github.com/repos/\(owner)/\(repo)/releases/latest")!
+        guard
+            let url = URL(
+                string: "https://api.github.com/repos/\(owner)/\(repo)/releases/latest")
+        else {
+            return .unavailable("Not a valid GitHub repository: \(owner)/\(repo).")
+        }
         var request = URLRequest(url: url)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (data, response) = try await session.data(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             guard status == 200 else {
                 return .unavailable(
@@ -87,12 +107,14 @@ public enum UpdateCheck {
                         ? "No published releases found (the repository may be private)."
                         : "GitHub returned HTTP \(status).")
             }
-            guard let release = ReleaseInfo(json: try JSONValue(data: data)) else {
+            guard let json = try? JSONValue(data: data),
+                let release = ReleaseInfo(json: json)
+            else {
                 return .unavailable("The latest release could not be parsed.")
             }
             return release.version > current
                 ? .updateAvailable(release)
-                : .upToDate(current)
+                : .upToDate(current: current, latest: release.version)
         } catch {
             return .unavailable(error.localizedDescription)
         }
