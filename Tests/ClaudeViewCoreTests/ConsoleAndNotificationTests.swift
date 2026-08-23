@@ -1,0 +1,155 @@
+import Foundation
+import Testing
+
+@testable import ClaudeViewCore
+
+@Suite struct ConsoleAndNotificationTests {
+    private func entries(_ lines: [String]) throws -> [TranscriptEntry] {
+        try lines.enumerated().map { try TranscriptEntry(line: Data($1.utf8), index: $0) }
+    }
+
+    // MARK: ANSI stripping
+
+    @Test func ansiEscapesVanishFromDisplayText() {
+        #expect(ANSIText.stripped("\u{1B}[2mCompacted \u{1B}[22m") == "Compacted ")
+        #expect(ANSIText.stripped("\u{1B}[38;5;208mcolor\u{1B}[0m done") == "color done")
+        #expect(ANSIText.stripped("\u{1B}]0;title\u{07}text") == "text")
+        #expect(ANSIText.stripped("\u{1B}]8;;url\u{1B}\\link") == "link")
+        #expect(ANSIText.stripped("\u{1B}creset") == "reset")
+        #expect(ANSIText.stripped("no escapes here") == "no escapes here")
+        #expect(ANSIText.stripped("trailing\u{1B}") == "trailing")
+    }
+
+    // MARK: `!` console exchanges
+
+    private let bashInputLine = """
+        {"type":"user","uuid":"u-in","message":{"role":"user","content":"<bash-input>ls docs</bash-input>"}}
+        """
+    private let bashOutputLine = """
+        {"type":"user","uuid":"u-out","message":{"role":"user","content":"<bash-stdout>SPEC.md</bash-stdout><bash-stderr></bash-stderr>"}}
+        """
+
+    @Test func bangCommandPairsWithItsOutput() throws {
+        let snapshot = SessionAssembler()
+            .assemble(entries: try entries([bashInputLine, bashOutputLine]))
+        #expect(snapshot.rows.count == 1)
+        guard case .console(let data) = snapshot.rows.first else {
+            Issue.record("expected a console row, got \(String(describing: snapshot.rows.first))")
+            return
+        }
+        #expect(data.command == "ls docs")
+        #expect(data.stdout == "SPEC.md")
+        #expect(data.stderr == nil)  // empty envelope collapses away
+        #expect(!data.isPending)
+    }
+
+    @Test func bangCommandWithoutOutputYetIsPending() throws {
+        let snapshot = SessionAssembler().assemble(entries: try entries([bashInputLine]))
+        guard case .console(let data) = snapshot.rows.first else {
+            Issue.record("expected a console row")
+            return
+        }
+        #expect(data.isPending)
+    }
+
+    @Test func orphanOutputStandsAlone() throws {
+        let snapshot = SessionAssembler().assemble(entries: try entries([bashOutputLine]))
+        guard case .console(let data) = snapshot.rows.first else {
+            Issue.record("expected a console row")
+            return
+        }
+        #expect(data.command == nil)
+        #expect(data.stdout == "SPEC.md")
+        #expect(!data.isPending)
+    }
+
+    @Test func consoleRowsDoNotBecomeTurnPromptsOrTitles() throws {
+        let snapshot = SessionAssembler()
+            .assemble(entries: try entries([bashInputLine, bashOutputLine]))
+        #expect(snapshot.title == nil)
+    }
+
+    // MARK: slash-command output
+
+    @Test func slashCommandOutputLosesItsAnsi() throws {
+        let line = """
+            {"type":"user","uuid":"u-lc","message":{"role":"user","content":"<local-command-stdout>\\u001b[2mCompacted \\u001b[22m</local-command-stdout>"}}
+            """
+        let snapshot = SessionAssembler().assemble(entries: try entries([line]))
+        guard case .console(let data) = snapshot.rows.first else {
+            Issue.record("expected a console row, got \(String(describing: snapshot.rows.first))")
+            return
+        }
+        #expect(data.command == nil)
+        #expect(data.stdout == "Compacted")
+        #expect(!data.isPending)
+    }
+
+    // MARK: task notifications
+
+    /// Mirrors a real completion notice (v2.1.221), scrubbed and shortened.
+    private let notificationLine = """
+        {"type":"user","uuid":"u-tn","message":{"role":"user","content":"<task-notification>\\n<task-id>fork123</task-id>\\n<output-file>/tmp/tasks/fork123.output</output-file>\\n<status>completed</status>\\n<summary>Agent \\"/code-review\\" finished</summary>\\n<note>A task-notification fires each time this agent stops.</note>\\n<result>All findings verified.</result>\\n<usage><subagent_tokens>75210</subagent_tokens><tool_uses>24</tool_uses><duration_ms>424413</duration_ms></usage>\\n</task-notification>"}}
+        """
+
+    @Test func taskNotificationBecomesACard() throws {
+        let snapshot = SessionAssembler().assemble(entries: try entries([notificationLine]))
+        guard case .taskNotification(let note) = snapshot.rows.first else {
+            Issue.record("expected a taskNotification row, got \(String(describing: snapshot.rows.first))")
+            return
+        }
+        #expect(note.taskId == "fork123")
+        #expect(note.status == "completed")
+        #expect(note.summary == "Agent \"/code-review\" finished")
+        #expect(note.result == "All findings verified.")
+        #expect(note.durationMs == 424413)
+        #expect(note.subagentTokens == 75210)
+        #expect(note.toolUses == 24)
+    }
+
+    @Test func userTaskNotificationCompletesItsFork() throws {
+        let launchLine = """
+            {"type":"system","subtype":"local_command","isMeta":false,"level":"info","uuid":"sys-1","content":"<local-command-stdout>Running in the background as @code-review</local-command-stdout>\\n<forked-skill-launch>{\\"agentId\\":\\"fork123\\",\\"skillName\\":\\"code-review\\",\\"description\\":\\"/code-review\\"}</forked-skill-launch>"}
+            """
+        let snapshot = SessionAssembler()
+            .assemble(entries: try entries([launchLine, notificationLine]))
+        guard case .forkLaunch(let fork) = snapshot.rows.first else {
+            Issue.record("expected a forkLaunch row")
+            return
+        }
+        #expect(fork.isComplete)
+    }
+
+    @Test func taskNotificationResolvesItsSubagent() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("notify-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data(
+            #"{"agentType":"general-purpose","description":"/code-review","name":"code-review"}"#
+                .utf8
+        ).write(to: dir.appendingPathComponent("agent-fork123.meta.json"))
+        try Data("{}\n".utf8).write(to: dir.appendingPathComponent("agent-fork123.jsonl"))
+
+        let snapshot = SessionAssembler(subagents: SubagentIndex.load(dir: dir))
+            .assemble(entries: try entries([notificationLine]))
+        guard case .taskNotification(let note) = snapshot.rows.first else {
+            Issue.record("expected a taskNotification row")
+            return
+        }
+        #expect(note.subagent?.name == "code-review")
+    }
+
+    /// Meta-flagged user entries (injected context) keep their info-row
+    /// treatment even when their text looks like command markup.
+    @Test func metaEntriesKeepTheirInfoRows() throws {
+        let line = """
+            {"type":"user","isMeta":true,"uuid":"u-meta","message":{"role":"user","content":"<local-command-stdout>not a console row</local-command-stdout>"}}
+            """
+        let snapshot = SessionAssembler().assemble(entries: try entries([line]))
+        guard case .info = snapshot.rows.first else {
+            Issue.record("expected an info row, got \(String(describing: snapshot.rows.first))")
+            return
+        }
+    }
+}

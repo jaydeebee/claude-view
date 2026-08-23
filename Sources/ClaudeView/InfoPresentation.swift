@@ -27,7 +27,15 @@ enum InfoPresentation {
         case "edited_text_file":
             return payload["filename"]?.stringValue.map(abbreviatePath)
         case "queued_command":
-            return payload["prompt"]?.stringValue.map(firstLine)
+            guard let prompt = payload["prompt"]?.stringValue else { return nil }
+            // A queued task-notification's first line is an XML tag; its
+            // summary is the part worth a detail slot.
+            if prompt.contains("<task-notification>"),
+                let summary = LocalCommandMarkup.tagContent("summary", in: prompt)
+            {
+                return firstLine(summary)
+            }
+            return firstLine(prompt)
         case "date_change":
             return payload["newDate"]?.stringValue
         case "task_reminder":

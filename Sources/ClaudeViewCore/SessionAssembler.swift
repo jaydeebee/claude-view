@@ -104,6 +104,36 @@ public struct ForkLaunchRowData: Sendable {
     public var isPending: Bool { !isComplete }
 }
 
+/// A command run at the local console: a `!` shell command (its input
+/// entry paired with the output entry that follows) or a slash command's
+/// printed output. Output text arrives ANSI-stripped.
+public struct ConsoleRowData: Sendable {
+    public let entry: TranscriptEntry
+    /// The typed `!` command; nil when the row is output alone.
+    public let command: String?
+    public var stdout: String?
+    public var stderr: String?
+    public var outputEntry: TranscriptEntry?
+
+    /// A `!` command whose output entry hasn't been written yet.
+    public var isPending: Bool { command != nil && outputEntry == nil }
+}
+
+/// A background agent's completion notice, delivered into the parent
+/// transcript as a user entry full of XML. Parsed into its parts; the
+/// task id doubles as the join key to the agent's own transcript.
+public struct TaskNotificationRowData: Sendable {
+    public let entry: TranscriptEntry
+    public let taskId: String?
+    public let status: String?
+    public let summary: String?
+    public let result: String?
+    public let durationMs: Double?
+    public let subagentTokens: Int64?
+    public let toolUses: Int64?
+    public var subagent: SubagentRef?
+}
+
 /// One row of the rendered transcript, in file order.
 public enum SessionRow: Sendable, Identifiable {
     case prompt(TranscriptEntry, text: String)
@@ -111,6 +141,8 @@ public enum SessionRow: Sendable, Identifiable {
     case thinking(TranscriptEntry, text: String)
     case toolCall(ToolCallRowData)
     case forkLaunch(ForkLaunchRowData)
+    case console(ConsoleRowData)
+    case taskNotification(TaskNotificationRowData)
     case info(TranscriptEntry, label: String)
     case unknown(TranscriptEntry)
 
@@ -124,6 +156,10 @@ public enum SessionRow: Sendable, Identifiable {
         case .toolCall(let data):
             return data.callEntry
         case .forkLaunch(let data):
+            return data.entry
+        case .console(let data):
+            return data.entry
+        case .taskNotification(let data):
             return data.entry
         }
     }
@@ -158,6 +194,8 @@ public struct SessionAssembler: Sendable {
         var openCalls: [String: Int] = [:]
         // agentId → row index, for marking forks complete on notification.
         var openForks: [String: Int] = [:]
+        // Row index of a `!` command still waiting for its output entry.
+        var openConsole: Int?
 
         for entry in entries {
             switch entry.kind {
@@ -187,7 +225,9 @@ public struct SessionAssembler: Sendable {
                 let label = entry.raw["attachment"]?["type"]?.stringValue ?? "attachment"
                 snapshot.rows.append(.info(entry, label: label))
             case .user:
-                appendUserRows(entry, into: &snapshot, openCalls: &openCalls)
+                appendUserRows(
+                    entry, into: &snapshot, openCalls: &openCalls,
+                    openForks: &openForks, openConsole: &openConsole)
             case .assistant:
                 appendAssistantRows(entry, into: &snapshot, openCalls: &openCalls)
             case .unknown:
@@ -230,19 +270,134 @@ public struct SessionAssembler: Sendable {
     ) {
         guard entry.raw["attachment"]?["type"]?.stringValue == "queued_command",
             let prompt = entry.raw["attachment"]?["prompt"]?.stringValue,
-            let taskId = LocalCommandMarkup.tagContent("task-id", in: prompt),
-            let rowIndex = openForks.removeValue(forKey: taskId),
+            let taskId = LocalCommandMarkup.tagContent("task-id", in: prompt)
+        else { return }
+        completeFork(taskId: taskId, in: &snapshot, openForks: &openForks)
+    }
+
+    private func completeFork(
+        taskId: String,
+        in snapshot: inout SessionSnapshot,
+        openForks: inout [String: Int]
+    ) {
+        guard let rowIndex = openForks.removeValue(forKey: taskId),
             case .forkLaunch(var fork) = snapshot.rows[rowIndex]
         else { return }
         fork.isComplete = true
         snapshot.rows[rowIndex] = .forkLaunch(fork)
     }
 
+    /// User entries that are really the harness talking — `!` console
+    /// exchanges, slash-command output, task notifications — get their own
+    /// row shapes instead of masquerading as prompts. Returns false for an
+    /// actual prompt.
+    private func appendSpecialUserRow(
+        _ entry: TranscriptEntry,
+        into snapshot: inout SessionSnapshot,
+        openForks: inout [String: Int],
+        openConsole: inout Int?
+    ) -> Bool {
+        guard !entry.isMeta,
+            entry.contentBlocks.count == 1,
+            case .text(let raw)? = entry.contentBlocks.first
+        else { return false }
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if text.hasPrefix("<task-notification>") {
+            let taskId = LocalCommandMarkup.tagContent("task-id", in: text)
+            var subagent = taskId.flatMap { subagents.byAgentId[$0] }
+            if subagent == nil,
+                let toolUseId = LocalCommandMarkup.tagContent("tool-use-id", in: text)
+            {
+                subagent = subagents.byToolUseId[toolUseId]
+            }
+            snapshot.rows.append(
+                .taskNotification(
+                    TaskNotificationRowData(
+                        entry: entry,
+                        taskId: taskId,
+                        status: trimmedTag("status", in: text),
+                        summary: trimmedTag("summary", in: text),
+                        result: trimmedTag("result", in: text),
+                        durationMs: trimmedTag("duration_ms", in: text).flatMap(Double.init),
+                        subagentTokens: trimmedTag("subagent_tokens", in: text).flatMap(Int64.init),
+                        toolUses: trimmedTag("tool_uses", in: text).flatMap(Int64.init),
+                        subagent: subagent)))
+            if let taskId {
+                completeFork(taskId: taskId, in: &snapshot, openForks: &openForks)
+            }
+            return true
+        }
+
+        if text.hasPrefix("<bash-input>") {
+            let command = trimmedTag("bash-input", in: text)
+            openConsole = snapshot.rows.count
+            snapshot.rows.append(
+                .console(ConsoleRowData(entry: entry, command: command ?? text)))
+            return true
+        }
+
+        if text.hasPrefix("<bash-stdout>") || text.hasPrefix("<bash-stderr>") {
+            let stdout = consoleText("bash-stdout", in: text)
+            let stderr = consoleText("bash-stderr", in: text)
+            if let rowIndex = openConsole,
+                case .console(var data) = snapshot.rows[rowIndex], data.isPending
+            {
+                data.stdout = stdout
+                data.stderr = stderr
+                data.outputEntry = entry
+                snapshot.rows[rowIndex] = .console(data)
+            } else {
+                snapshot.rows.append(
+                    .console(
+                        ConsoleRowData(
+                            entry: entry, command: nil,
+                            stdout: stdout, stderr: stderr, outputEntry: entry)))
+            }
+            openConsole = nil
+            return true
+        }
+
+        if text.hasPrefix("<local-command-stdout>") {
+            snapshot.rows.append(
+                .console(
+                    ConsoleRowData(
+                        entry: entry, command: nil,
+                        stdout: consoleText("local-command-stdout", in: text),
+                        stderr: consoleText("local-command-stderr", in: text),
+                        outputEntry: entry)))
+            return true
+        }
+
+        return false
+    }
+
+    private func trimmedTag(_ tag: String, in text: String) -> String? {
+        LocalCommandMarkup.tagContent(tag, in: text)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Tag content readied for display: ANSI escapes stripped, whitespace
+    /// trimmed, empty collapsed to nil.
+    private func consoleText(_ tag: String, in text: String) -> String? {
+        guard let inner = LocalCommandMarkup.tagContent(tag, in: text) else { return nil }
+        let stripped = ANSIText.stripped(inner)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return stripped.isEmpty ? nil : stripped
+    }
+
     private func appendUserRows(
         _ entry: TranscriptEntry,
         into snapshot: inout SessionSnapshot,
-        openCalls: inout [String: Int]
+        openCalls: inout [String: Int],
+        openForks: inout [String: Int],
+        openConsole: inout Int?
     ) {
+        if appendSpecialUserRow(
+            entry, into: &snapshot, openForks: &openForks, openConsole: &openConsole)
+        {
+            return
+        }
         var promptPieces: [String] = []
         for block in entry.contentBlocks {
             switch block {

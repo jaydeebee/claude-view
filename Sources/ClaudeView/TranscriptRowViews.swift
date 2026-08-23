@@ -55,6 +55,10 @@ struct TranscriptRowView: View {
             ToolCallRowView(call: call, isExpanded: $isExpanded, context: context)
         case .forkLaunch(let fork):
             ForkLaunchRowView(fork: fork, isExpanded: $isExpanded, context: context)
+        case .console(let data):
+            ConsoleRowView(data: data, isExpanded: $isExpanded, context: context)
+        case .taskNotification(let note):
+            TaskNotificationRowView(note: note, isExpanded: $isExpanded, context: context)
         case .info(let entry, let label):
             let display = InfoPresentation.display(for: entry, fallback: label)
             CollapsibleRow(isExpanded: $isExpanded) {
@@ -200,12 +204,8 @@ struct ToolCallRowView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(Self.mustard))
+                .fill(Color.toolWash))
     }
-
-    /// The machinery's color: prompts are blue, turn ends green, tool
-    /// work a mild mustard. Prose and record-keeping stay unwashed.
-    private static let mustard = Color(red: 0.85, green: 0.7, blue: 0.2).opacity(0.10)
 
     @ViewBuilder private var statusBadge: some View {
         if call.isPending && context.isLive {
@@ -408,5 +408,185 @@ struct SubSessionLinkView: View {
         }
         .buttonStyle(.plain)
         .help("Open this sub-session")
+    }
+}
+
+/// The machinery's color: prompts are blue, turn ends green, tool and
+/// console work a mild mustard. Prose and record-keeping stay unwashed.
+extension Color {
+    static let toolWash = Color(red: 0.85, green: 0.7, blue: 0.2).opacity(0.10)
+}
+
+/// A local console exchange: a `!` shell command with the output it
+/// printed, or a slash command's own output. The assembler strips the
+/// ANSI escapes Claude Code logs verbatim before text gets here.
+struct ConsoleRowView: View {
+    let data: ConsoleRowData
+    @Binding var isExpanded: Bool
+    let context: RowContext
+
+    private static let outputDisplayLimit = 8_000
+
+    var body: some View {
+        CollapsibleRow(isExpanded: $isExpanded) {
+            Image(systemName: "terminal")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+            if let command = data.command {
+                Text("!")
+                    .font(.subheadline.weight(.semibold).monospaced())
+                    .foregroundStyle(Color.accentColor)
+                Text(command)
+                    .font(.subheadline.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } else {
+                Text(headline)
+                    .font(.subheadline.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            statusBadge
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                if let stdout = data.stdout {
+                    outputText(stdout, tint: .primary)
+                }
+                if let stderr = data.stderr {
+                    outputText(stderr, tint: .red)
+                }
+                if data.stdout == nil && data.stderr == nil {
+                    Text(data.isPending ? "no output yet" : "no output")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.quaternary.opacity(0.5)))
+            .padding(.leading, 22)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.toolWash))
+    }
+
+    /// Output-only rows lead with their own first line: "Compacted",
+    /// "Set effort level to xhigh", …
+    private var headline: String {
+        let text = data.stdout ?? data.stderr ?? ""
+        let first = text.prefix(while: { $0 != "\n" })
+        return first.isEmpty ? "console output" : String(first)
+    }
+
+    @ViewBuilder private var statusBadge: some View {
+        if data.isPending && context.isLive {
+            ProgressView()
+                .controlSize(.mini)
+        } else if data.isPending {
+            Image(systemName: "hourglass")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .help("No output recorded — the session ended first")
+        }
+    }
+
+    @ViewBuilder private func outputText(_ text: String, tint: Color) -> some View {
+        let clipped = text.count > Self.outputDisplayLimit
+        Text(clipped ? String(text.prefix(Self.outputDisplayLimit)) : text)
+            .font(.caption.monospaced())
+            .foregroundStyle(tint)
+            .textSelection(.enabled)
+        if clipped {
+            Text("… \(text.count - Self.outputDisplayLimit) more characters")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// A background agent reporting in: the XML notice Claude Code appends to
+/// the parent transcript, rendered as the card it wanted to be — summary
+/// up front, the agent's result and doorway behind the chevron.
+struct TaskNotificationRowView: View {
+    let note: TaskNotificationRowData
+    @Binding var isExpanded: Bool
+    let context: RowContext
+
+    var body: some View {
+        CollapsibleRow(isExpanded: $isExpanded) {
+            Image(systemName: statusSymbol)
+                .font(.caption)
+                .foregroundStyle(.purple)
+                .frame(width: 16)
+            Text(note.summary ?? "Task notification")
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let vitals = vitalsText {
+                Text(vitals)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        } content: {
+            VStack(alignment: .leading, spacing: 8) {
+                if let result = note.result, !result.isEmpty {
+                    MarkdownBlockText(text: result)
+                }
+                if let subagent = note.subagent {
+                    SubSessionLinkView(
+                        subagent: subagent, isActive: false, context: context)
+                }
+                if note.result == nil && note.subagent == nil {
+                    Text("no result recorded")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.purple.opacity(0.05)))
+            .padding(.leading, 22)
+        }
+    }
+
+    private var statusSymbol: String {
+        switch note.status {
+        case "completed": "checkmark.circle"
+        case "killed": "stop.circle"
+        case "failed", "errored": "exclamationmark.triangle"
+        default: "bell"
+        }
+    }
+
+    /// "7m 4s · 75,210 tokens · 24 tools" — whatever the usage block held.
+    private var vitalsText: String? {
+        var parts: [String] = []
+        if let ms = note.durationMs {
+            if ms < 1000 {
+                parts.append("\(Int(ms))ms")
+            } else if ms < 60_000 {
+                parts.append(String(format: "%.1fs", ms / 1000))
+            } else {
+                let seconds = Int(ms / 1000)
+                parts.append("\(seconds / 60)m \(seconds % 60)s")
+            }
+        }
+        if let tokens = note.subagentTokens {
+            parts.append("\(tokens.formatted()) tokens")
+        }
+        if let tools = note.toolUses {
+            parts.append("\(tools) tool\(tools == 1 ? "" : "s")")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

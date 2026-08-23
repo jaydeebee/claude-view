@@ -208,6 +208,8 @@ private struct TranscriptLoadedView: View {
         case .thinking: "thinking"
         case .toolCall: "tool"
         case .forkLaunch: "fork"
+        case .console: "console"
+        case .taskNotification: "notification"
         case .info: "info"
         case .unknown: "unknown"
         }
@@ -309,7 +311,9 @@ private struct TranscriptLoadedView: View {
             return (call.isPending && isLive) || isMostRecent
         case .forkLaunch(let fork):
             return (fork.isPending && isLive) || isMostRecent
-        case .thinking:
+        case .console(let data):
+            return (data.isPending && isLive) || isMostRecent
+        case .thinking, .taskNotification:
             return isMostRecent
         case .info, .unknown:
             return false
