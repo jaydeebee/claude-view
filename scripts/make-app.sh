@@ -49,7 +49,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
 EOF
 
 if [ -n "${CODESIGN_IDENTITY:-}" ]; then
-    codesign --force --options runtime --sign "$CODESIGN_IDENTITY" "$APP"
+    codesign --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP"
     echo "Signed as: $CODESIGN_IDENTITY"
 fi
 
