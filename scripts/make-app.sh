@@ -3,7 +3,7 @@
 #
 # Signing is optional and off by default:
 #   CODESIGN_IDENTITY="Developer ID Application: ..." scripts/make-app.sh
-# Override the bundle id with BUNDLE_ID=... (default: local.claude-view).
+# Override the bundle id with BUNDLE_ID=... (default: com.jaydeebee.app.claude-view).
 #
 # VERSION sets CFBundleShortVersionString. Unset, it falls back to the
 # nearest git tag; with no tag either, the app is left unversioned so
@@ -12,7 +12,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-BUNDLE_ID="${BUNDLE_ID:-local.claude-view}"
+BUNDLE_ID="${BUNDLE_ID:-com.jaydeebee.app.claude-view}"
 if [ -z "${VERSION:-}" ]; then
     VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^[vV]//' || true)"
 fi
