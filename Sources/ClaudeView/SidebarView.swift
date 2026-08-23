@@ -15,7 +15,7 @@ struct SidebarView: View {
                     ForEach(model.liveRefs, id: \.ref) { live in
                         LiveSessionRow(session: live.session)
                             .tag(live.ref)
-                        ForEach(model.activeSubagents(for: live.ref)) { agent in
+                        ForEach(model.sidebarAgents(for: live.ref)) { agent in
                             ActiveSubagentRow(agent: agent)
                                 .tag(agent.ref)
                         }
@@ -40,6 +40,23 @@ struct SidebarView: View {
             }
         }
         .navigationSplitViewColumnWidth(min: 240, ideal: 300)
+        .toolbar {
+            ToolbarItem {
+                Button {
+                    model.agentFilterRunningOnly.toggle()
+                } label: {
+                    Label(
+                        "Filter agents",
+                        systemImage: model.agentFilterRunningOnly
+                            ? "line.3.horizontal.decrease.circle.fill"
+                            : "line.3.horizontal.decrease.circle")
+                }
+                .help(
+                    model.agentFilterRunningOnly
+                        ? "Showing active agents only — click for all"
+                        : "Showing all agents — click for active only")
+            }
+        }
     }
 }
 
@@ -125,15 +142,17 @@ struct ActiveSubagentRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            if agent.isRunning {
+            switch agent.state {
+            case .processing:
                 ProgressView()
                     .controlSize(.mini)
-            } else {
-                Text("done")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+            case .idle:
+                Circle().fill(Color.orange).frame(width: 7, height: 7)
+            case .inactive:
+                Circle().fill(Color.secondary.opacity(0.4)).frame(width: 6, height: 6)
             }
         }
+        .opacity(agent.state == .inactive ? 0.55 : 1)
         .padding(.leading, 16 + CGFloat(agent.depth) * 14)
         .padding(.vertical, 1)
     }

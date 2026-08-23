@@ -27,6 +27,8 @@ final class AppModel {
     private(set) var liveSessions: [RegistrySession] = []
     private(set) var projects: [ProjectListing] = []
     var selection: SessionRef?
+    /// Sidebar filter: hide long-inactive agents when true.
+    var agentFilterRunningOnly = false
 
     private let registry: SessionRegistry
     private let discovery: SessionDiscovery
@@ -115,6 +117,13 @@ final class AppModel {
 /// agents never appear in the session registry, so running-ness is
 /// inferred from transcript freshness.
 struct ActiveSubagent: Identifiable {
+    /// The usual indicators: spinner, orange for idle, dimmed when done.
+    enum State {
+        case processing  // transcript written in the last 30s
+        case idle        // recent activity, not writing right now
+        case inactive    // quiet for 10+ minutes
+    }
+
     let ref: SessionRef
     let title: String
     let detail: String?
@@ -123,20 +132,23 @@ struct ActiveSubagent: Identifiable {
     /// 0 = spawned by the session; 1+ = spawned by another agent.
     let depth: Int
 
-    var isRunning: Bool { lastActivity.timeIntervalSinceNow > -30 }
+    var state: State {
+        if lastActivity.timeIntervalSinceNow > -30 { return .processing }
+        if lastActivity.timeIntervalSinceNow > -600 { return .idle }
+        return .inactive
+    }
+
     var id: String { ref.sessionId }
 }
 
 extension AppModel {
-    /// The agent tree for one live session: agents active in the last two
-    /// hours, children indented under the agent that spawned them. Older
-    /// runs stay reachable forever through their launch rows in the
-    /// transcript; the sidebar is the "recent and running" view.
+    /// The complete agent tree for one live session, children indented
+    /// under the agent that spawned them. State (processing/idle/inactive)
+    /// conveys age; the filter toggle prunes the inactive.
     func activeSubagents(for parent: SessionRef) -> [ActiveSubagent] {
         let dir = paths.subagentsDir(
             projectSlug: parent.projectSlug, sessionId: parent.sessionId)
         let index = SubagentIndex.load(dir: dir)
-        let cutoff = Date().addingTimeInterval(-7200)
         let byParent = Dictionary(
             grouping: index.byAgentId.values, by: { $0.parentAgentId })
 
@@ -149,9 +161,8 @@ extension AppModel {
                 .compactMap { agent -> (SubagentRef, Date?, Date)? in
                     let values = try? agent.transcriptURL.resourceValues(
                         forKeys: [.creationDateKey, .contentModificationDateKey])
-                    guard let mtime = values?.contentModificationDate, mtime > cutoff
-                    else { return nil }
-                    return (agent, values?.creationDate, mtime)
+                    return (agent, values?.creationDate,
+                            values?.contentModificationDate ?? .distantPast)
                 }
                 .sorted { ($0.1 ?? .distantPast) < ($1.1 ?? .distantPast) }
             for (agent, created, mtime) in group {
@@ -173,6 +184,13 @@ extension AppModel {
         }
         append(parentAgentId: nil, depth: 0)
         return out
+    }
+
+    /// What the sidebar lists: everything, or only the not-yet-inactive.
+    func sidebarAgents(for parent: SessionRef) -> [ActiveSubagent] {
+        let agents = activeSubagents(for: parent)
+        guard agentFilterRunningOnly else { return agents }
+        return agents.filter { $0.state != .inactive }
     }
 
     /// Liveness/busyness for whatever the detail pane is showing. Sessions
