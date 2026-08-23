@@ -41,9 +41,12 @@ running sessions and an append-only JSONL transcript per session, with
 agent transcripts alongside. Claude View watches those files with
 FSEvents and tails them incrementally — that's the whole trick.
 
-It is strictly read-only: no configuration, no network, no hooks
-installed, nothing modified, nothing leaves your machine. If Claude
-Code isn't installed, there is simply nothing to show.
+It is strictly read-only: no hooks installed, nothing modified, and —
+with one disclosed exception — no network. The exception: once a day,
+and whenever you ask via the app menu, it asks GitHub whether a newer
+release exists. Version strings travel; nothing else does. The
+automatic check is the app's one setting, toggled in the same menu.
+If Claude Code isn't installed, there is simply nothing to show.
 
 ## Running it
 
