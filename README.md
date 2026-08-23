@@ -2,82 +2,76 @@
 
 A native macOS viewer for [Claude Code](https://code.claude.com) sessions.
 
-Claude View is an adjunct to the Claude Code TUI, not a replacement: the TUI stays
-the input surface, while Claude View renders session transcripts live so recent
-history stays reviewable even when the terminal backlog is lost. Activities,
-thinking, and tool calls expand and collapse; subagent runs render as nested
-sub-sessions; every row can be flipped over to inspect the raw transcript entry.
+![Claude View](docs/screenshot.png)
+
+Claude Code's terminal UI is where you work — but terminal backlog is
+fragile, and busy sessions scroll fast. Claude View is the companion
+window: it renders your sessions live as they progress, keeps history
+reviewable and skimmable, and never asks for input. The terminal stays
+in charge; the viewer keeps the record legible.
+
+## What it shows
+
+- **Every session on the machine**, live ones first. Running sessions
+  show their status (working, idle, or whatever the harness reports);
+  finished ones stay browsable per project, titled and timestamped.
+- **Agents as a tree.** Task agents and background skills like
+  `/code-review` appear nested under their session in the sidebar, each
+  with its own running/idle/done indicator — expand a review to watch
+  its finder agents individually, or click any agent to open its stream
+  full-pane. Launch points inside a transcript link to the same place.
+- **Turns that fold.** Each prompt heads the turn it elicited: recent
+  turns render in full, older ones collapse to the question plus step
+  count and duration. Inside a turn, tool calls show what they're doing
+  on one line and expand to inputs and results; whatever is currently
+  running stays open on its own.
+- **Prose as prose.** Markdown renders properly — fenced code, tables,
+  lists — with a quiet color language behind it: blue for your prompts,
+  mustard for tool work, green for a turn's end.
+- **The truth, on demand.** Every row can be flipped over to the raw
+  transcript entry — syntax-colored, value-aligned JSON, faithful to
+  the bytes (exact integers, escaped control characters). When Claude
+  Code's internal format shifts, unknown entries render as raw JSON
+  instead of breaking.
 
 ## How it works
 
-Claude Code writes everything Claude View needs to `~/.claude`:
+Claude Code writes session data under `~/.claude`: a registry of
+running sessions and an append-only JSONL transcript per session, with
+agent transcripts alongside. Claude View watches those files with
+FSEvents and tails them incrementally — that's the whole trick.
 
-```
-~/.claude/
-├── sessions/<pid>.json                live-session registry (pid, status, name)
-├── projects/<project-slug>/           one dir per working directory
-│   ├── <session-uuid>.jsonl           transcript — append-only JSONL
-│   └── <session-uuid>/subagents/
-│       ├── agent-<id>.jsonl           one transcript per subagent
-│       └── agent-<id>.meta.json       join key back to the spawning tool call
-└── session-env/<session-uuid>/        per-session scratch
-```
+It is strictly read-only: no configuration, no network, no hooks
+installed, nothing modified, nothing leaves your machine. If Claude
+Code isn't installed, there is simply nothing to show.
 
-The viewer watches those directories with FSEvents and tails transcripts
-incrementally. A logical **session** is assembled from files with four join keys:
+## Running it
 
-1. registry entry ↔ transcript, by `sessionId`
-2. subagent file ↔ spawning `Task` tool call, by `meta.json` `toolUseId`
-3. assistant entries → one API message, by `message.id`
-   (each content block — text, thinking, tool call — is its own JSONL line)
-4. `tool_result` ↔ `tool_use`, by `tool_use_id`
-
-Rows render in file order; `parentUuid` is lineage metadata, not render order.
-The transcript format is internal to Claude Code and unstable across releases,
-so parsing is deliberately tolerant: unknown entry types degrade to raw-JSON
-rows instead of errors.
-
-## Architecture
-
-| Layer | Role |
-|---|---|
-| `FileStore` | watchers + tailers; emits raw entries per file |
-| `SessionAssembler` | applies the join keys; produces the logical session model |
-| UI | session-first presentation, with a raw file/entry inspector underneath |
-
-Read-only by design (v1). A later version may relay input back into sessions —
-headless slash commands and Claude Code's cross-session messaging socket make
-that feasible without changing this architecture.
-
-## Building
+Grab the app from [Releases](../../releases), or build from source:
 
 ```sh
-swift build          # or: swift run ClaudeView
-swift test
-scripts/make-app.sh  # dist/Claude View.app; CODESIGN_IDENTITY=... to sign
+swift run ClaudeView     # development
+scripts/make-app.sh      # dist/Claude View.app
+swift test               # unit tests
 ```
 
-Requires a current macOS and Xcode toolchain. No third-party dependencies.
+Requires macOS 15+ and a current Xcode toolchain. No dependencies.
 
-`CLAUDE_VIEW_REAL_DATA=1 swift test` additionally runs the canary suite,
-which parses and assembles every transcript in the real `~/.claude` —
-useful after a Claude Code update to catch format drift early.
+`CLAUDE_VIEW_REAL_DATA=1 swift test` additionally parses and assembles
+every transcript in your real `~/.claude` — useful after a Claude Code
+update to catch format drift early.
 
-## Roadmap
+## Releasing (maintainers)
 
-- [x] Charter: README, license, scaffolding
-- [x] Tolerant transcript-entry model
-- [x] Incremental JSONL tailer
-- [x] Live-session registry + liveness
-- [x] FSEvents watchers + session discovery
-- [x] Session assembler (message grouping, tool pairing, subagent linking)
-- [x] Sidebar: live sessions first, per-project history
-- [x] Transcript view: collapse/expand, live-follow, in-progress rows auto-open
-- [x] Raw JSON inspector; subagents as nested sub-sessions
-- [x] App bundle + signing script
-- Later: richer Markdown rendering (block-level, code fences), file
-  references as clickable links, async initial load for very large
-  transcripts, input relay into sessions
+```sh
+scripts/make-release.sh 0.2.0
+```
+
+Builds a universal binary, wraps and signs the app
+(`CODESIGN_IDENTITY="Developer ID Application: ..."`), notarizes and
+staples if `NOTARY_PROFILE` names a `notarytool` keychain profile, and
+zips the result into `dist/` with the `gh release` command printed at
+the end.
 
 ## License
 

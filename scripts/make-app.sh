@@ -8,14 +8,20 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BUNDLE_ID="${BUNDLE_ID:-local.claude-view}"
-VERSION="0.1.0"
+VERSION="${VERSION:-0.1.0}"
 APP="dist/Claude View.app"
 
-swift build -c release
+if [ "${UNIVERSAL:-0}" = "1" ]; then
+    swift build -c release --arch arm64 --arch x86_64
+    BIN=".build/apple/Products/Release/ClaudeView"
+else
+    swift build -c release
+    BIN=".build/release/ClaudeView"
+fi
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
-cp .build/release/ClaudeView "$APP/Contents/MacOS/Claude View"
+cp "$BIN" "$APP/Contents/MacOS/Claude View"
 
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
