@@ -281,7 +281,9 @@ extension AppModel {
                 url: run.journalURL,
                 subagentsDir: run.dir),
             title: run.name ?? run.runId,
-            detail: "workflow · \(run.finished.count)/\(run.agents.count) done",
+            // Short by construction: the sidebar middle-truncates this
+            // line, and a chewed "32/45" reads as a plausible wrong count.
+            detail: "\(run.finished.count)/\(run.agents.count) agents",
             startedAt: children.first?.startedAt,
             lastActivity: journalMtime ?? .distantPast,
             completedAt: nil,
