@@ -207,7 +207,9 @@ extension AppModel {
         let dir = paths.subagentsDir(
             projectSlug: parent.projectSlug, sessionId: parent.sessionId)
         let index = SubagentIndex.load(dir: dir)
-        guard !index.byAgentId.isEmpty else { return [] }
+        let runs = WorkflowRunIndex.load(subagentsDir: dir)
+        let runNodes = runs.map { workflowNode(for: $0, parent: parent) }
+        guard !index.byAgentId.isEmpty else { return runNodes }
         let byParent = Dictionary(
             grouping: index.byAgentId.values, by: { $0.parentAgentId })
         var visited = Set<String>()
@@ -247,6 +249,43 @@ extension AppModel {
         }
         return build(
             parentAgentId: nil, events: completionScanner.poll(parent.url), depth: 0)
+            + runNodes
+    }
+
+    /// A workflow run as one collapsible node: the run's agents are its
+    /// children in start order, done-ness straight from the journal — a
+    /// serial run shows one spinner and a growing train of checkmarks.
+    private func workflowNode(for run: WorkflowRun, parent: SessionRef) -> ActiveSubagent {
+        let children = run.agents.enumerated().map { n, agent -> ActiveSubagent in
+            let values = try? agent.transcriptURL.resourceValues(
+                forKeys: [.creationDateKey, .contentModificationDateKey])
+            let mtime = values?.contentModificationDate ?? .distantPast
+            return ActiveSubagent(
+                ref: SessionRef(
+                    projectSlug: parent.projectSlug,
+                    sessionId: "agent-\(agent.agentId)",
+                    url: agent.transcriptURL,
+                    subagentsDir: run.dir),
+                title: agent.name ?? "agent \(n + 1)",
+                detail: agent.taskDescription,
+                startedAt: values?.creationDate,
+                lastActivity: mtime,
+                completedAt: run.finished.contains(agent.agentId) ? mtime : nil)
+        }
+        let journalMtime = (try? run.journalURL.resourceValues(
+            forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        return ActiveSubagent(
+            ref: SessionRef(
+                projectSlug: parent.projectSlug,
+                sessionId: "wfrun-\(run.runId)",
+                url: run.journalURL,
+                subagentsDir: run.dir),
+            title: run.name ?? run.runId,
+            detail: "workflow · \(run.finished.count)/\(run.agents.count) done",
+            startedAt: children.first?.startedAt,
+            lastActivity: journalMtime ?? .distantPast,
+            completedAt: nil,
+            children: children)
     }
 
     /// When the spawner heard this agent stop: a task-notification naming
@@ -282,7 +321,11 @@ extension AppModel {
     /// their own transcript freshness.
     func status(for ref: SessionRef) -> (live: Bool, busy: Bool) {
         if let dir = ref.subagentsDir {
-            let parentSessionId = dir.deletingLastPathComponent().lastPathComponent
+            // The session id is the component above "subagents" — the dir
+            // itself may be nested deeper (workflow runs).
+            let components = dir.pathComponents
+            let parentSessionId = components.lastIndex(of: "subagents")
+                .flatMap { $0 > 0 ? components[$0 - 1] : nil }
             let live = liveSessions.contains { $0.sessionId == parentSessionId }
             let mtime = (try? ref.url.resourceValues(
                 forKeys: [.contentModificationDateKey]))?.contentModificationDate
