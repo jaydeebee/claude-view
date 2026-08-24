@@ -33,6 +33,10 @@ final class AppModel {
     private let registry: SessionRegistry
     private let discovery: SessionDiscovery
     private var watcher: FSEventsWatcher?
+    /// Filled lazily from `title(for:)` during List body evaluation — must
+    /// stay outside observation, or the write invalidates the sidebar
+    /// mid-update and the List paints overlapping rows.
+    @ObservationIgnored
     private var titleCache: [String: (modifiedAt: Date, title: String?)] = [:]
 
     init(paths: ClaudePaths = ClaudePaths()) {
@@ -61,9 +65,14 @@ final class AppModel {
     // MARK: Sidebar derivations
 
     var liveRefs: [(session: RegistrySession, ref: SessionRef)] {
-        liveSessions.compactMap { session in
+        // A session can briefly own two registry entries (a stale pid file
+        // whose pid was recycled, then a resume). The registry lists
+        // freshest first; keep that one — duplicate rows corrupt the List.
+        var seen = Set<String>()
+        return liveSessions.compactMap { session in
             guard let sessionId = session.sessionId,
-                let cwd = session.cwd
+                let cwd = session.cwd,
+                seen.insert(sessionId).inserted
             else { return nil }
             let slug = ClaudePaths.projectSlug(for: cwd)
             return (
