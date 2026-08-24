@@ -13,8 +13,11 @@ struct SidebarView: View {
                         .font(.callout)
                 } else {
                     ForEach(model.liveRefs, id: \.ref) { live in
-                        LiveSessionRow(session: live.session)
-                            .tag(live.ref)
+                        LiveSessionRow(
+                            session: live.session,
+                            usage: model.contextUsage(for: live.ref.url)
+                        )
+                        .tag(live.ref)
                         ForEach(model.sidebarAgents(for: live.ref)) { agent in
                             AgentTreeRow(agent: agent)
                         }
@@ -27,7 +30,8 @@ struct SidebarView: View {
                     ForEach(group.transcripts.prefix(15)) { transcript in
                         HistorySessionRow(
                             transcript: transcript,
-                            title: model.title(for: transcript)
+                            title: model.title(for: transcript),
+                            usage: model.contextUsage(for: transcript.url)
                         )
                         .tag(
                             SessionRef(
@@ -61,6 +65,10 @@ struct SidebarView: View {
 
 struct LiveSessionRow: View {
     let session: RegistrySession
+    /// Context size of the last turn. Live is no guarantee of warm — a
+    /// TUI left idle past the TTL reprocesses everything on the next
+    /// message — so the count wears the same warmth color as history.
+    let usage: ContextUsage?
 
     private var isBusy: Bool { session.status == "busy" }
     private var isIdle: Bool { session.status == "idle" || session.status == nil }
@@ -75,7 +83,7 @@ struct LiveSessionRow: View {
                 Text(session.name ?? session.sessionId?.prefix(8).description ?? "session")
                     .lineLimit(1)
                 if let cwd = session.cwd {
-                    Text((cwd as NSString).abbreviatingWithTildeInPath)
+                    cwdLine(cwd)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -93,26 +101,70 @@ struct LiveSessionRow: View {
             }
         }
         .padding(.vertical, 2)
+        .help(usage.map { warmthHint($0, verb: "next turn") } ?? "")
+    }
+
+    private func cwdLine(_ cwd: String) -> Text {
+        let base = Text((cwd as NSString).abbreviatingWithTildeInPath)
+        guard let usage else { return base }
+        return base + warmTokenText(" · " + tokenLabel(usage.contextTokens), usage: usage)
     }
 }
 
 struct HistorySessionRow: View {
     let transcript: TranscriptFile
     let title: String?
+    let usage: ContextUsage?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title ?? String(transcript.sessionId.prefix(8)))
                 .lineLimit(1)
-            Text(
-                transcript.modifiedAt.formatted(.relative(presentation: .named))
-                    + " · " + transcript.size.formatted(.byteCount(style: .file))
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            subtitle
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
+        .help(usage.map { warmthHint($0, verb: "resume") } ?? "")
     }
+
+    /// "2 weeks ago · 2.2 MB · 181k tok" — the token run turns orange
+    /// while the prompt cache is presumed warm.
+    private var subtitle: Text {
+        let base = Text(
+            transcript.modifiedAt.formatted(.relative(presentation: .named))
+                + " · " + transcript.size.formatted(.byteCount(style: .file)))
+        guard let usage else { return base }
+        return base
+            + warmTokenText(" · " + tokenLabel(usage.contextTokens) + " tok", usage: usage)
+    }
+}
+
+/// "412", "263k", "1.3M" — sidebar-density token counts.
+private func tokenLabel(_ count: Int64) -> String {
+    switch count {
+    case ..<1_000: "\(count)"
+    case ..<1_000_000: "\((count + 500) / 1_000)k"
+    default: String(format: "%.1fM", Double(count) / 1_000_000)
+    }
+}
+
+/// A token-count run that turns orange while the cache is presumed
+/// warm; time-based, so each heartbeat re-render lets it cool off.
+private func warmTokenText(_ label: String, usage: ContextUsage) -> Text {
+    guard usage.warmUntil > Date() else { return Text(label) }
+    return Text(label).foregroundStyle(.orange)
+}
+
+/// Row tooltip; `verb` names the act the cost applies to — "resume"
+/// for history rows, "next turn" for live ones.
+private func warmthHint(_ usage: ContextUsage, verb: String) -> String {
+    let tokens = tokenLabel(usage.contextTokens)
+    guard usage.warmUntil > Date() else {
+        return "Cache cold — \(verb) reprocesses ~\(tokens) tokens uncached"
+    }
+    let minutes = max(1, Int(usage.warmUntil.timeIntervalSinceNow / 60))
+    return "Cache warm — \(verb) reuses ~\(tokens) tokens (expires in ~\(minutes)m)"
 }
 
 /// One node of the agent tree. Agents with children render as a

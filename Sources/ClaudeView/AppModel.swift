@@ -44,6 +44,9 @@ final class AppModel {
     /// mid-update and the List paints overlapping rows.
     @ObservationIgnored
     private var titleCache: [String: (modifiedAt: Date, title: String?)] = [:]
+    /// Same deal for context sizes — filled during body, so untracked.
+    @ObservationIgnored
+    private var usageCache: [URL: (modifiedAt: Date, usage: ContextUsage?)] = [:]
 
     init(paths: ClaudePaths = ClaudePaths()) {
         self.paths = paths
@@ -128,6 +131,19 @@ final class AppModel {
         let title = TranscriptPeek.quickTitle(url: transcript.url)
         titleCache[transcript.sessionId] = (transcript.modifiedAt, title)
         return title
+    }
+
+    /// Context size for a sidebar row, cached by modification time.
+    func contextUsage(for url: URL) -> ContextUsage? {
+        let mtime =
+            (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate ?? .distantPast
+        if let cached = usageCache[url], cached.modifiedAt == mtime {
+            return cached.usage
+        }
+        let usage = TranscriptPeek.quickUsage(url: url)
+        usageCache[url] = (mtime, usage)
+        return usage
     }
 }
 

@@ -48,5 +48,43 @@ import Testing
         let empty = try write([])
         defer { try? FileManager.default.removeItem(at: empty) }
         #expect(TranscriptPeek.quickTitle(url: empty) == nil)
+        #expect(TranscriptPeek.quickUsage(url: missing) == nil)
+        #expect(TranscriptPeek.quickUsage(url: empty) == nil)
+    }
+
+    @Test func usageComesFromTheNewestAssistantTurn() throws {
+        let url = try write([
+            #"{"type":"assistant","uuid":"a1","timestamp":"2026-08-23T10:00:00Z","message":{"role":"assistant","usage":{"input_tokens":5,"cache_read_input_tokens":1000,"cache_creation_input_tokens":100,"output_tokens":50},"content":[{"type":"text","text":"old"}]}}"#,
+            #"{"type":"assistant","uuid":"a2","timestamp":"2026-08-23T10:05:00Z","message":{"role":"assistant","usage":{"input_tokens":2,"cache_read_input_tokens":2000,"cache_creation_input_tokens":300,"output_tokens":9,"cache_creation":{"ephemeral_5m_input_tokens":300,"ephemeral_1h_input_tokens":0}},"content":[{"type":"text","text":"new"}]}}"#,
+            #"{"type":"user","uuid":"u1","message":{"role":"user","content":"bye"}}"#,
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let usage = try #require(TranscriptPeek.quickUsage(url: url))
+        #expect(usage.contextTokens == 2302)
+        #expect(usage.at == TranscriptEntry.parseTimestamp("2026-08-23T10:05:00Z"))
+        #expect(usage.cacheTTL == 300)
+        #expect(usage.warmUntil == usage.at.addingTimeInterval(300))
+    }
+
+    @Test func oneHourCacheWritesBuyTheLongClock() throws {
+        let url = try write([
+            #"{"type":"assistant","uuid":"a1","timestamp":"2026-08-23T10:00:00Z","message":{"role":"assistant","usage":{"input_tokens":2,"cache_read_input_tokens":500,"cache_creation_input_tokens":40,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":40}},"content":[{"type":"text","text":"hi"}]}}"#
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+        #expect(try #require(TranscriptPeek.quickUsage(url: url)).cacheTTL == 3600)
+    }
+
+    @Test func sidechainAndEmptyUsageEntriesAreSkipped() throws {
+        let url = try write([
+            #"{"type":"assistant","uuid":"a1","timestamp":"2026-08-23T09:00:00Z","message":{"role":"assistant","usage":{"input_tokens":3,"cache_read_input_tokens":700,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"main"}]}}"#,
+            #"{"type":"assistant","uuid":"a2","isSidechain":true,"timestamp":"2026-08-23T10:00:00Z","message":{"role":"assistant","usage":{"input_tokens":9,"cache_read_input_tokens":9999,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"agent"}]}}"#,
+            #"{"type":"assistant","uuid":"a3","timestamp":"2026-08-23T11:00:00Z","message":{"role":"assistant","usage":{"input_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1},"content":[{"type":"text","text":"synthetic"}]}}"#,
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let usage = try #require(TranscriptPeek.quickUsage(url: url))
+        #expect(usage.contextTokens == 703)
+        #expect(usage.cacheTTL == 300)  // no breakdown → short clock
     }
 }
