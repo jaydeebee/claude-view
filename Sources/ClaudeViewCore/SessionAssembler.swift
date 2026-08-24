@@ -139,7 +139,7 @@ public struct TaskNotificationRowData: Sendable {
 }
 
 /// One row of the rendered transcript, in file order.
-public enum SessionRow: Sendable, Identifiable {
+public enum SessionRow: Sendable {
     case prompt(TranscriptEntry, text: String)
     case assistantText(TranscriptEntry, text: String)
     case thinking(TranscriptEntry, text: String)
@@ -154,7 +154,10 @@ public enum SessionRow: Sendable, Identifiable {
     case bookkeeping(TranscriptEntry)
     case unknown(TranscriptEntry)
 
-    public var id: String { "\(entry.id)#\(entry.index)" }
+    /// Identifies the *entry* this row came from — several rows can share
+    /// one. Row identity lives in `SessionSnapshot.rowIds`; deliberately
+    /// not `id`, so nothing mistakes this for something unique.
+    public var entryKey: String { "\(entry.id)#\(entry.index)" }
 
     public var entry: TranscriptEntry {
         switch self {
@@ -184,6 +187,10 @@ public struct SessionSnapshot: Sendable {
     /// as the harness last reported it to the model.
     public var tokensLeft: Int64?
     public var rows: [SessionRow] = []
+    /// Identity for each row in `rows`, parallel and same length. One
+    /// entry yields one row per content block, so the entry's own key
+    /// repeats; these don't.
+    public var rowIds: [String] = []
     public var entryCount = 0
 
     public init() {}
@@ -267,7 +274,24 @@ public struct SessionAssembler: Sendable {
                 break
             }
         }
+        snapshot.rowIds = Self.rowIdentities(for: snapshot.rows)
         return snapshot
+    }
+
+    /// Numbers the rows an entry produced, so each gets its own identity.
+    /// An assistant message of [text, tool_use, tool_use] is three rows
+    /// off one entry; left sharing a key they collide in a SwiftUI
+    /// ForEach and two of them never render. Rows for an entry are
+    /// emitted together and appends never renumber what came before, so
+    /// these stay stable as a live session grows.
+    static func rowIdentities(for rows: [SessionRow]) -> [String] {
+        var countPerEntry: [String: Int] = [:]
+        return rows.map { row in
+            let key = row.entryKey
+            let ordinal = countPerEntry[key, default: 0]
+            countPerEntry[key] = ordinal + 1
+            return ordinal == 0 ? key : "\(key).\(ordinal)"
+        }
     }
 
     /// A `local_command` system entry that carries a forked-skill-launch

@@ -99,7 +99,7 @@ private struct TranscriptLoadedView: View {
                     // Seed from ALL rows, not just the displayed ones —
                     // flipping the internals switch reveals old rows, and
                     // old rows don't fade in like fresh arrivals.
-                    initialRowIds = Set(model.snapshot.rows.map(\.id))
+                    initialRowIds = Set(model.snapshot.rowIds)
                 }
                 scrollToEnd(proxy: proxy, animated: false)
             }
@@ -122,16 +122,22 @@ private struct TranscriptLoadedView: View {
     /// top: an empty thinking row (floor Everything, since it carries
     /// nothing after the fact) still shows at any level while it is the
     /// live frontier — "thinking right now".
-    private var displayRows: [SessionRow] {
+    private var displayRows: [DisplayRow] {
         let rows = model.snapshot.rows
-        let lastId = rows.last?.id
-        return rows.filter { row in
-            if detail.shows(DetailLevel.floor(for: row)) { return true }
-            if case .thinking(_, let text) = row, text.isEmpty {
-                return isLive && row.id == lastId
+        let lastIndex = rows.count - 1
+        return zip(model.snapshot.rowIds, rows).enumerated()
+            .compactMap { index, pair in
+                let (id, row) = pair
+                if detail.shows(DetailLevel.floor(for: row)) {
+                    return DisplayRow(id: id, row: row)
+                }
+                if case .thinking(_, let text) = row, text.isEmpty, isLive,
+                    index == lastIndex
+                {
+                    return DisplayRow(id: id, row: row)
+                }
+                return nil
             }
-            return false
-        }
     }
 
     @ViewBuilder private var rowViews: some View {
@@ -162,18 +168,20 @@ private struct TranscriptLoadedView: View {
         }
     }
 
-    @ViewBuilder private func turnRows(_ rows: [SessionRow]) -> some View {
-        ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-            NewRowFade(isNew: isNewRow(row)) {
+    @ViewBuilder private func turnRows(_ rows: [DisplayRow]) -> some View {
+        ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
+            NewRowFade(isNew: isNewRowId(item.id)) {
                 TranscriptRowView(
-                    row: row,
-                    isExpanded: expansionBinding(for: row),
+                    row: item.row,
+                    isExpanded: expansionBinding(for: item),
                     context: rowContext)
             }
             // Runs of the same row type stay tight (4); a type change opens
             // the gap to 7 — repeated Bash calls read as one burst of work.
-            .padding(.top, index > 0 && rowFamily(rows[index - 1]) == rowFamily(row) ? 0 : 3)
-            .id(row.id)
+            .padding(
+                .top,
+                index > 0 && rowFamily(rows[index - 1].row) == rowFamily(item.row) ? 0 : 3)
+            .id(item.id)
         }
     }
 
@@ -184,15 +192,15 @@ private struct TranscriptLoadedView: View {
     private var turnGroups: [TurnGroup] {
         var groups: [TurnGroup] = []
         var current = TurnGroup(id: "preamble", index: 0, promptText: nil, rows: [])
-        for row in displayRows {
-            if case .prompt(_, let text) = row {
+        for item in displayRows {
+            if case .prompt(_, let text) = item.row {
                 if current.promptText != nil || !current.rows.isEmpty {
                     groups.append(current)
                 }
                 current = TurnGroup(
-                    id: row.id, index: groups.count, promptText: text, rows: [])
+                    id: item.id, index: groups.count, promptText: text, rows: [])
             } else {
-                current.rows.append(row)
+                current.rows.append(item)
             }
         }
         if current.promptText != nil || !current.rows.isEmpty {
@@ -295,11 +303,6 @@ private struct TranscriptLoadedView: View {
             onOpenSession: onOpenSession)
     }
 
-    private func isNewRow(_ row: SessionRow) -> Bool {
-        guard let initialRowIds else { return false }
-        return !initialRowIds.contains(row.id)
-    }
-
     private static func compactTokens(_ n: Int64) -> String {
         switch n {
         case 1_000_000...:
@@ -329,10 +332,10 @@ private struct TranscriptLoadedView: View {
     /// while the session lives — a dead session's unanswered call is a
     /// historical fact, not work in progress. A manual toggle wins until
     /// the session is reselected.
-    private func expansionBinding(for row: SessionRow) -> Binding<Bool> {
+    private func expansionBinding(for item: DisplayRow) -> Binding<Bool> {
         Binding(
-            get: { expansionOverrides[row.id] ?? defaultExpansion(for: row) },
-            set: { expansionOverrides[row.id] = $0 }
+            get: { expansionOverrides[item.id] ?? defaultExpansion(for: item) },
+            set: { expansionOverrides[item.id] = $0 }
         )
     }
 
@@ -340,16 +343,17 @@ private struct TranscriptLoadedView: View {
     /// thinking marker or bookkeeping stamp doesn't count, so the tool
     /// call before it stays open while the model thinks about its result.
     private var frontierRowId: String? {
-        model.snapshot.rows.last(where: { row in
+        let index = model.snapshot.rows.lastIndex(where: { row in
             if case .thinking(_, let text) = row, text.isEmpty { return false }
             if case .bookkeeping = row { return false }
             return true
-        })?.id
+        })
+        return index.map { model.snapshot.rowIds[$0] }
     }
 
-    private func defaultExpansion(for row: SessionRow) -> Bool {
-        let isMostRecent = isLive && row.id == frontierRowId
-        switch row {
+    private func defaultExpansion(for item: DisplayRow) -> Bool {
+        let isMostRecent = isLive && item.id == frontierRowId
+        switch item.row {
         case .prompt, .assistantText:
             return true
         case .toolCall(let call):
@@ -424,15 +428,23 @@ struct PulseBar: View {
 }
 
 /// One prompt and everything it elicited, up to the next prompt.
+/// A row carrying the identity SwiftUI needs. The row itself can't
+/// supply it — one entry becomes several rows — so it comes paired from
+/// `SessionSnapshot.rowIds`.
+private struct DisplayRow: Identifiable {
+    let id: String
+    let row: SessionRow
+}
+
 private struct TurnGroup: Identifiable {
     let id: String
     let index: Int
     let promptText: String?
-    var rows: [SessionRow] = []
+    var rows: [DisplayRow] = []
 
     var durationText: String? {
-        for row in rows {
-            if case .info(let entry, _) = row, entry.subtype == "turn_duration" {
+        for item in rows {
+            if case .info(let entry, _) = item.row, entry.subtype == "turn_duration" {
                 return InfoPresentation.display(for: entry, fallback: "").detail
             }
         }

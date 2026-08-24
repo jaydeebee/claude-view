@@ -53,32 +53,36 @@ import Testing
 
         for project in SessionDiscovery(paths: paths).projects() {
             for transcript in project.transcripts {
-                let data = try Data(contentsOf: transcript.url)
-                var entries: [TranscriptEntry] = []
-                for (i, line) in data.split(separator: UInt8(ascii: "\n")).enumerated()
-                where !line.isEmpty {
-                    entries.append(try TranscriptEntry(line: Data(line), index: i))
-                }
-                let subagents = SubagentIndex.load(
-                    dir: paths.subagentsDir(
-                        projectSlug: project.slug, sessionId: transcript.sessionId))
-                let snapshot = SessionAssembler(subagents: subagents)
-                    .assemble(entries: entries)
+                let dir = paths.subagentsDir(
+                    projectSlug: project.slug, sessionId: transcript.sessionId)
+                let subagents = SubagentIndex.load(dir: dir)
+                // Agent transcripts too, not just the session's own: they
+                // are where multi-block assistant entries cluster, and a
+                // duplicate-id bug hid here for exactly that reason.
+                let urls = [transcript.url] + subagentTranscripts(in: dir)
 
-                totals.transcripts += 1
-                totals.rows += snapshot.rows.count
-                var rowIds = Set<String>()
-                for row in snapshot.rows {
+                for url in urls {
+                    let data = try Data(contentsOf: url)
+                    var entries: [TranscriptEntry] = []
+                    for (i, line) in data.split(separator: UInt8(ascii: "\n")).enumerated()
+                    where !line.isEmpty {
+                        entries.append(try TranscriptEntry(line: Data(line), index: i))
+                    }
+                    let snapshot = SessionAssembler(subagents: subagents)
+                        .assemble(entries: entries)
+
+                    totals.transcripts += 1
+                    totals.rows += snapshot.rows.count
                     #expect(
-                        rowIds.insert(row.id).inserted,
-                        "duplicate row id \(row.id) in \(transcript.sessionId)")
-                }
-                for case .info(_, let label) in snapshot.rows
-                where label == "orphan tool result" {
-                    totals.orphans += 1
-                }
-                for case .toolCall(let call) in snapshot.rows where call.isPending {
-                    totals.pending += 1
+                        snapshot.rowIds.count == snapshot.rows.count,
+                        "rowIds out of step with rows in \(url.lastPathComponent)")
+                    var seen = Set<String>()
+                    for id in snapshot.rowIds {
+                        #expect(
+                            seen.insert(id).inserted,
+                            "duplicate row id \(id) in \(url.lastPathComponent)")
+                    }
+                    countInterestingRows(snapshot, into: &totals)
                 }
             }
         }
@@ -88,5 +92,24 @@ import Testing
             "canary: assembled \(totals.transcripts) transcripts, "
                 + "\(totals.rows) rows, \(totals.orphans) orphan results, "
                 + "\(totals.pending) pending calls")
+    }
+
+    private func subagentTranscripts(in dir: URL) -> [URL] {
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil)) ?? []
+        return files.filter { $0.pathExtension == "jsonl" }
+    }
+
+    private func countInterestingRows(
+        _ snapshot: SessionSnapshot,
+        into totals: inout (transcripts: Int, rows: Int, orphans: Int, pending: Int)
+    ) {
+        for case .info(_, let label) in snapshot.rows
+        where label == "orphan tool result" {
+            totals.orphans += 1
+        }
+        for case .toolCall(let call) in snapshot.rows where call.isPending {
+            totals.pending += 1
+        }
     }
 }

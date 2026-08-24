@@ -205,6 +205,35 @@ import Testing
         #expect(call.subagent?.stoppedByUser == false)
     }
 
+    @Test func everyRowFromOneEntryGetsItsOwnId() throws {
+        // One assistant message, three content blocks — the shape that
+        // silently dropped tool calls when identity came from the entry.
+        let multiBlock = """
+            {"type":"assistant","uuid":"a-multi","message":{"role":"assistant","id":"msg_1","content":[{"type":"text","text":"looking"},{"type":"tool_use","id":"tu-1","name":"Read","input":{}},{"type":"tool_use","id":"tu-2","name":"Read","input":{}}]}}
+            """
+        let snapshot = SessionAssembler().assemble(entries: try entries([multiBlock]))
+
+        #expect(snapshot.rows.count == 3)
+        #expect(snapshot.rowIds.count == snapshot.rows.count)
+        #expect(Set(snapshot.rowIds).count == 3)
+        // All three still name the entry they came from.
+        #expect(snapshot.rowIds.allSatisfy { $0.hasPrefix("a-multi#") })
+    }
+
+    @Test func rowIdsSurviveAppendsUnchanged() throws {
+        let first = Fixtures.assistantToolUse
+        let second = """
+            {"type":"user","uuid":"u-later","message":{"role":"user","content":"next"}}
+            """
+        let assembler = SessionAssembler()
+        let before = assembler.assemble(entries: try entries([first]))
+        let after = assembler.assemble(entries: try entries([first, second]))
+
+        // A live session re-assembles on every append; earlier rows must
+        // keep their identity or SwiftUI rebuilds them mid-session.
+        #expect(Array(after.rowIds.prefix(before.rowIds.count)) == before.rowIds)
+    }
+
     @Test func userKilledAgentCarriesItsStamp() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("subagents-\(UUID().uuidString)")
