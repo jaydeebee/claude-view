@@ -175,9 +175,13 @@ struct ActiveSubagentRow: View {
                 Circle().fill(Color.orange).frame(width: 7, height: 7)
             case .inactive:
                 Circle().fill(Color.secondary.opacity(0.4)).frame(width: 6, height: 6)
+            case .completed:
+                Image(systemName: "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
-        .opacity(state == .inactive ? 0.55 : 1)
+        .opacity(state <= .inactive ? 0.55 : 1)
         .padding(.vertical, 1)
     }
 }

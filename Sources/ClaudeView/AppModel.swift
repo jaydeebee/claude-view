@@ -26,13 +26,19 @@ final class AppModel {
 
     private(set) var liveSessions: [RegistrySession] = []
     private(set) var projects: [ProjectListing] = []
+    /// Agent trees per live session id, rebuilt in `refresh()` so the
+    /// sidebar's body stays a pure read — no disk IO, no scanner mutation.
+    private(set) var agentTrees: [String: [ActiveSubagent]] = [:]
     var selection: SessionRef?
-    /// Sidebar filter: hide long-inactive agents when true.
+    /// Sidebar filter: hide finished and long-inactive agents when true.
     var agentFilterRunningOnly = false
 
     private let registry: SessionRegistry
     private let discovery: SessionDiscovery
     private var watcher: FSEventsWatcher?
+    /// Incremental per-file scan state — a cache, not view state.
+    @ObservationIgnored
+    private let completionScanner = AgentCompletionScanner()
     /// Filled lazily from `title(for:)` during List body evaluation — must
     /// stay outside observation, or the write invalidates the sidebar
     /// mid-update and the List paints overlapping rows.
@@ -60,6 +66,9 @@ final class AppModel {
     func refresh() {
         liveSessions = registry.liveSessions()
         projects = discovery.projects()
+        agentTrees = Dictionary(
+            liveRefs.map { ($0.ref.sessionId, buildAgentTree(for: $0.ref)) },
+            uniquingKeysWith: { first, _ in first })
     }
 
     // MARK: Sidebar derivations
@@ -122,15 +131,18 @@ final class AppModel {
     }
 }
 
-/// An agent under a live session, surfaced in the sidebar tree. Background
-/// agents never appear in the session registry, so running-ness is
-/// inferred from transcript freshness.
+/// An agent under a live session, surfaced in the sidebar tree. Agents
+/// never appear in the session registry, so done-ness comes from the
+/// completion event in whoever spawned them; transcript freshness only
+/// separates working from waiting while that event is outstanding.
 struct ActiveSubagent: Identifiable {
-    /// The usual indicators: spinner, orange for idle, dimmed when done.
+    /// The usual indicators: spinner, orange while unresolved, checkmark
+    /// once the spawner has heard the end.
     enum State: Int {
-        case inactive = 0  // quiet for 10+ minutes
-        case idle = 1      // recent activity, not writing right now
-        case processing = 2  // transcript written in the last 30s
+        case completed = 0  // completion event seen, nothing since
+        case inactive = 1   // no event, quiet for 10+ minutes
+        case idle = 2       // no event, recent activity, not writing now
+        case processing = 3  // transcript written in the last 30s
     }
 
     let ref: SessionRef
@@ -138,9 +150,19 @@ struct ActiveSubagent: Identifiable {
     let detail: String?
     let startedAt: Date?
     let lastActivity: Date
+    /// When the spawner heard this agent stop; nil while unresolved.
+    let completedAt: Date?
     var children: [ActiveSubagent] = []
 
+    /// Transcript writes after the completion event mean the agent was
+    /// revived (SendMessage); the old event no longer settles anything.
+    private var isSettled: Bool {
+        guard let completedAt else { return false }
+        return lastActivity <= completedAt.addingTimeInterval(5)
+    }
+
     var state: State {
+        if isSettled { return .completed }
         if lastActivity.timeIntervalSinceNow > -30 { return .processing }
         if lastActivity.timeIntervalSinceNow > -600 { return .idle }
         return .inactive
@@ -162,16 +184,21 @@ extension ActiveSubagent.State: Comparable {
 
 extension AppModel {
     /// The complete agent tree for one live session: children nested under
-    /// the agent that spawned them, oldest first.
-    func agentTree(for parent: SessionRef) -> [ActiveSubagent] {
+    /// the agent that spawned them, oldest first. Each agent's completion
+    /// comes from its spawner's transcript — the session's for depth-1
+    /// agents, the parent agent's for those it spawned in turn.
+    private func buildAgentTree(for parent: SessionRef) -> [ActiveSubagent] {
         let dir = paths.subagentsDir(
             projectSlug: parent.projectSlug, sessionId: parent.sessionId)
         let index = SubagentIndex.load(dir: dir)
+        guard !index.byAgentId.isEmpty else { return [] }
         let byParent = Dictionary(
             grouping: index.byAgentId.values, by: { $0.parentAgentId })
         var visited = Set<String>()
 
-        func build(parentAgentId: String?, depth: Int) -> [ActiveSubagent] {
+        func build(
+            parentAgentId: String?, events: AgentCompletionEvents, depth: Int
+        ) -> [ActiveSubagent] {
             guard depth < 4 else { return [] }
             return (byParent[parentAgentId] ?? [])
                 .compactMap { agent -> (SubagentRef, Date?, Date)? in
@@ -193,22 +220,42 @@ extension AppModel {
                         detail: agent.taskDescription,
                         startedAt: created,
                         lastActivity: mtime,
-                        children: build(parentAgentId: agent.agentId, depth: depth + 1))
+                        completedAt: completedAt(of: agent, mtime: mtime, events: events),
+                        children: byParent[agent.agentId] == nil
+                            ? []
+                            : build(
+                                parentAgentId: agent.agentId,
+                                events: completionScanner.poll(agent.transcriptURL),
+                                depth: depth + 1))
                 }
         }
-        return build(parentAgentId: nil, depth: 0)
+        return build(
+            parentAgentId: nil, events: completionScanner.poll(parent.url), depth: 0)
+    }
+
+    /// When the spawner heard this agent stop: a task-notification naming
+    /// it, the tool_result answering its Task call, or — for a user-killed
+    /// agent that may get neither — the stamp in its meta.
+    private func completedAt(
+        of agent: SubagentRef, mtime: Date, events: AgentCompletionEvents
+    ) -> Date? {
+        if let at = events.byAgentId[agent.agentId] { return at }
+        if let toolUseId = agent.toolUseId, let at = events.byToolUseId[toolUseId] {
+            return at
+        }
+        return agent.stoppedByUser ? mtime : nil
     }
 
     /// What the sidebar lists: everything, or — filtered — only agents that
-    /// are still active or shelter an active descendant.
+    /// are still unresolved or shelter an unresolved descendant.
     func sidebarAgents(for parent: SessionRef) -> [ActiveSubagent] {
-        let tree = agentTree(for: parent)
+        let tree = agentTrees[parent.sessionId] ?? []
         guard agentFilterRunningOnly else { return tree }
         func prune(_ agents: [ActiveSubagent]) -> [ActiveSubagent] {
             agents.compactMap { agent in
                 var kept = agent
                 kept.children = prune(agent.children)
-                return kept.state != .inactive || !kept.children.isEmpty ? kept : nil
+                return kept.state >= .idle || !kept.children.isEmpty ? kept : nil
             }
         }
         return prune(tree)
