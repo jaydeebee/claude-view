@@ -15,6 +15,9 @@ public struct SubagentRef: Sendable {
     public let taskDescription: String?
     /// Set on depth-2+ agents (spawned by another agent, not the session).
     public let parentAgentId: String?
+    /// Stamped into the meta when the user kills the agent — the one
+    /// stop that may never produce a completion event.
+    public let stoppedByUser: Bool
 }
 
 /// Every subagent under a session's subagents directory, keyed both ways.
@@ -41,7 +44,8 @@ public struct SubagentIndex: Sendable {
                 agentType: meta["agentType"]?.stringValue,
                 name: meta["name"]?.stringValue,
                 taskDescription: meta["description"]?.stringValue,
-                parentAgentId: meta["parentAgentId"]?.stringValue)
+                parentAgentId: meta["parentAgentId"]?.stringValue,
+                stoppedByUser: meta["stoppedByUser"]?.boolValue ?? false)
             index.byAgentId[ref.agentId] = ref
             if let toolUseId = ref.toolUseId {
                 index.byToolUseId[toolUseId] = ref

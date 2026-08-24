@@ -202,6 +202,22 @@ import Testing
         #expect(call.subagent?.agentId == "abc123")
         #expect(call.subagent?.agentType == "Explore")
         #expect(call.subagent?.transcriptURL.lastPathComponent == "agent-abc123.jsonl")
+        #expect(call.subagent?.stoppedByUser == false)
+    }
+
+    @Test func userKilledAgentCarriesItsStamp() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("subagents-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        try Data(
+            #"{"agentType":"general-purpose","description":"review","name":"code-review","spawnDepth":1,"stoppedByUser":true}"#
+                .utf8
+        ).write(to: dir.appendingPathComponent("agent-dead1.meta.json"))
+
+        let index = SubagentIndex.load(dir: dir)
+        #expect(index.byAgentId["dead1"]?.stoppedByUser == true)
     }
 
     @Test func totalTokensReminderFeedsTheBudgetGauge() throws {
