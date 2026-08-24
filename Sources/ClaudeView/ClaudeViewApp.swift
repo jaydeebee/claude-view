@@ -10,6 +10,7 @@ struct ClaudeViewApp: App {
         // regular app, so claim it: dock icon, menu bar, key window.
         NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate()
+        AppearanceMode.stored.apply()
     }
 
     var body: some Scene {

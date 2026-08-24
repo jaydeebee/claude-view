@@ -26,6 +26,11 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 760, minHeight: 480)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                AppearanceToggle()
+            }
+        }
         .task {
             model.start()
             model.startHeartbeat()
