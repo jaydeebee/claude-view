@@ -3,7 +3,7 @@ import Foundation
 import Observation
 
 /// Identifies one session in the UI, live or historical.
-struct SessionRef: Hashable, Identifiable {
+struct SessionRef: Hashable, Identifiable, Sendable {
     let projectSlug: String
     let sessionId: String
     let url: URL
@@ -24,34 +24,27 @@ struct SessionRef: Hashable, Identifiable {
 final class AppModel {
     let paths: ClaudePaths
 
-    private(set) var liveSessions: [RegistrySession] = []
-    private(set) var projects: [ProjectListing] = []
-    /// Agent trees per live session id, rebuilt in `refresh()` so the
-    /// sidebar's body stays a pure read — no disk IO, no scanner mutation.
-    private(set) var agentTrees: [String: [ActiveSubagent]] = [:]
+    /// The last completed scan. Everything the sidebar draws comes from
+    /// here, so its body stays a pure read.
+    private(set) var state = SidebarState()
     var selection: SessionRef?
     /// Sidebar filter: hide finished and long-inactive agents when true.
     var agentFilterRunningOnly = false
 
-    private let registry: SessionRegistry
-    private let discovery: SessionDiscovery
     private var watcher: FSEventsWatcher?
-    /// Incremental per-file scan state — a cache, not view state.
     @ObservationIgnored
-    private let completionScanner = AgentCompletionScanner()
-    /// Filled lazily from `title(for:)` during List body evaluation — must
-    /// stay outside observation, or the write invalidates the sidebar
-    /// mid-update and the List paints overlapping rows.
+    private let worker: SidebarWorker
+    /// A scan in flight, and whether events arrived while it ran — a
+    /// burst of FSEvents collapses into one follow-up rather than a queue
+    /// of identical full scans.
     @ObservationIgnored
-    private var titleCache: [String: (modifiedAt: Date, title: String?)] = [:]
-    /// Same deal for context sizes — filled during body, so untracked.
+    private var scanning: Task<Void, Never>?
     @ObservationIgnored
-    private var usageCache: [URL: (modifiedAt: Date, usage: ContextUsage?)] = [:]
+    private var rescanWanted = false
 
     init(paths: ClaudePaths = ClaudePaths()) {
         self.paths = paths
-        self.registry = SessionRegistry(paths: paths)
-        self.discovery = SessionDiscovery(paths: paths)
+        self.worker = SidebarWorker(paths: paths)
     }
 
     func start() {
@@ -72,14 +65,29 @@ final class AppModel {
     func stop() {
         watcher?.stop()
         watcher = nil
+        scanning?.cancel()
+        scanning = nil
     }
 
+    /// Kicks off a scan unless one is already running, in which case one
+    /// more follows it. The work itself happens on the worker; only the
+    /// assignment lands here.
     func refresh() {
-        liveSessions = registry.liveSessions()
-        projects = discovery.projects()
-        agentTrees = Dictionary(
-            liveRefs.map { ($0.ref.sessionId, buildAgentTree(for: $0.ref)) },
-            uniquingKeysWith: { first, _ in first })
+        guard scanning == nil else {
+            rescanWanted = true
+            return
+        }
+        scanning = Task { [weak self] in
+            guard let self else { return }
+            let scanned = await worker.scan()
+            guard !Task.isCancelled else { return }
+            self.state = scanned
+            self.scanning = nil
+            if self.rescanWanted {
+                self.rescanWanted = false
+                self.refresh()
+            }
+        }
     }
 
     // MARK: Sidebar derivations
@@ -89,7 +97,7 @@ final class AppModel {
         // whose pid was recycled, then a resume). The registry lists
         // freshest first; keep that one — duplicate rows corrupt the List.
         var seen = Set<String>()
-        return liveSessions.compactMap { session in
+        return state.liveSessions.compactMap { session in
             guard let sessionId = session.sessionId,
                 let cwd = session.cwd,
                 seen.insert(sessionId).inserted
@@ -105,19 +113,9 @@ final class AppModel {
         }
     }
 
-    private var liveSessionIds: Set<String> {
-        Set(liveSessions.compactMap(\.sessionId))
-    }
-
-    /// History listing with live sessions removed (they sit in Live above).
-    var historyProjects: [(project: ProjectListing, transcripts: [TranscriptFile])] {
-        let live = liveSessionIds
-        return projects.compactMap { project in
-            let rest = project.transcripts.filter { !live.contains($0.sessionId) }
-            guard !rest.isEmpty else { return nil }
-            return (project, rest)
-        }
-    }
+    /// History listing, live sessions already removed and trimmed by the
+    /// worker (they sit in Live above).
+    var historyProjects: [ProjectListing] { state.projects }
 
     /// "-Users-x-src-app" reads poorly; show it relative to $HOME when possible.
     nonisolated static func displayName(forSlug slug: String) -> String {
@@ -129,37 +127,20 @@ final class AppModel {
         return slug
     }
 
-    /// Sidebar title for a transcript, cached by modification time.
+    /// Sidebar title for a transcript, as of the last scan.
     func title(for transcript: TranscriptFile) -> String? {
-        if let cached = titleCache[transcript.sessionId],
-            cached.modifiedAt == transcript.modifiedAt
-        {
-            return cached.title
-        }
-        let title = TranscriptPeek.quickTitle(url: transcript.url)
-        titleCache[transcript.sessionId] = (transcript.modifiedAt, title)
-        return title
+        state.titles[transcript.url]
     }
 
-    /// Context size for a sidebar row, cached by modification time.
-    func contextUsage(for url: URL) -> ContextUsage? {
-        let mtime =
-            (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-            .contentModificationDate ?? .distantPast
-        if let cached = usageCache[url], cached.modifiedAt == mtime {
-            return cached.usage
-        }
-        let usage = TranscriptPeek.quickUsage(url: url)
-        usageCache[url] = (mtime, usage)
-        return usage
-    }
+    /// Context size for a sidebar row, as of the last scan.
+    func contextUsage(for url: URL) -> ContextUsage? { state.usage[url] }
 }
 
 /// An agent under a live session, surfaced in the sidebar tree. Agents
 /// never appear in the session registry, so done-ness comes from the
 /// completion event in whoever spawned them; transcript freshness only
 /// separates working from waiting while that event is outstanding.
-struct ActiveSubagent: Identifiable {
+struct ActiveSubagent: Identifiable, Sendable {
     /// The usual indicators: spinner, orange while unresolved, checkmark
     /// once the spawner has heard the end.
     enum State: Int {
@@ -207,79 +188,10 @@ extension ActiveSubagent.State: Comparable {
 }
 
 extension AppModel {
-    /// The complete agent tree for one live session: children nested under
-    /// the agent that spawned them, oldest first. Each agent's completion
-    /// comes from its spawner's transcript — the session's for depth-1
-    /// agents, the parent agent's for those it spawned in turn.
-    private func buildAgentTree(for parent: SessionRef) -> [ActiveSubagent] {
-        let dir = paths.subagentsDir(
-            projectSlug: parent.projectSlug, sessionId: parent.sessionId)
-        let index = SubagentIndex.load(dir: dir)
-        guard !index.byAgentId.isEmpty else { return [] }
-        let byParent = Dictionary(
-            grouping: index.byAgentId.values, by: { $0.parentAgentId })
-        // The only tool results worth reading are the ones answering a
-        // Task call that spawned one of these agents.
-        let watched = Set(index.byToolUseId.keys)
-        var visited = Set<String>()
-
-        func build(
-            parentAgentId: String?, events: AgentCompletionEvents, depth: Int
-        ) -> [ActiveSubagent] {
-            guard depth < 4 else { return [] }
-            return (byParent[parentAgentId] ?? [])
-                .compactMap { agent -> (SubagentRef, Date?, Date)? in
-                    guard visited.insert(agent.agentId).inserted else { return nil }
-                    let values = try? agent.transcriptURL.resourceValues(
-                        forKeys: [.creationDateKey, .contentModificationDateKey])
-                    return (agent, values?.creationDate,
-                            values?.contentModificationDate ?? .distantPast)
-                }
-                .sorted { ($0.1 ?? .distantPast) < ($1.1 ?? .distantPast) }
-                .map { agent, created, mtime in
-                    ActiveSubagent(
-                        ref: SessionRef(
-                            projectSlug: parent.projectSlug,
-                            sessionId: "agent-\(agent.agentId)",
-                            url: agent.transcriptURL,
-                            subagentsDir: dir),
-                        title: agent.name ?? agent.agentType ?? "agent",
-                        detail: agent.taskDescription,
-                        startedAt: created,
-                        lastActivity: mtime,
-                        completedAt: completedAt(of: agent, mtime: mtime, events: events),
-                        children: byParent[agent.agentId] == nil
-                            ? []
-                            : build(
-                                parentAgentId: agent.agentId,
-                                events: completionScanner.poll(
-                                    agent.transcriptURL, watching: watched),
-                                depth: depth + 1))
-                }
-        }
-        return build(
-            parentAgentId: nil,
-            events: completionScanner.poll(parent.url, watching: watched),
-            depth: 0)
-    }
-
-    /// When the spawner heard this agent stop: a task-notification naming
-    /// it, the tool_result answering its Task call, or — for a user-killed
-    /// agent that may get neither — the stamp in its meta.
-    private func completedAt(
-        of agent: SubagentRef, mtime: Date, events: AgentCompletionEvents
-    ) -> Date? {
-        if let at = events.byAgentId[agent.agentId] { return at }
-        if let toolUseId = agent.toolUseId, let at = events.byToolUseId[toolUseId] {
-            return at
-        }
-        return agent.stoppedByUser ? mtime : nil
-    }
-
     /// What the sidebar lists: everything, or — filtered — only agents that
     /// are still unresolved or shelter an unresolved descendant.
     func sidebarAgents(for parent: SessionRef) -> [ActiveSubagent] {
-        let tree = agentTrees[parent.sessionId] ?? []
+        let tree = state.agentTrees[parent.sessionId] ?? []
         guard agentFilterRunningOnly else { return tree }
         func prune(_ agents: [ActiveSubagent]) -> [ActiveSubagent] {
             agents.compactMap { agent in
@@ -296,11 +208,14 @@ extension AppModel {
     /// their own transcript freshness.
     func status(for ref: SessionRef) -> (live: Bool, busy: Bool) {
         if let dir = ref.subagentsDir {
-            let parentSessionId = dir.deletingLastPathComponent().lastPathComponent
-            let live = liveSessions.contains { $0.sessionId == parentSessionId }
-            let mtime = (try? ref.url.resourceValues(
-                forKeys: [.contentModificationDateKey]))?.contentModificationDate
-            let busy = live && (mtime.map { $0.timeIntervalSinceNow > -20 } ?? false)
+            // Answered from the last scan rather than a fresh stat: this
+            // runs in the detail pane's body.
+            let components = dir.pathComponents
+            let parentSessionId = components.lastIndex(of: "subagents")
+                .flatMap { $0 > 0 ? components[$0 - 1] : nil }
+            let live = state.liveSessions.contains { $0.sessionId == parentSessionId }
+            let activity = state.agentActivity[ref.sessionId]
+            let busy = live && (activity.map { $0.timeIntervalSinceNow > -20 } ?? false)
             return (live, busy)
         }
         let live = liveRefs.first { $0.ref == ref }

@@ -17,6 +17,12 @@ public struct ProjectListing: Sendable, Identifiable {
     public let url: URL
     public let transcripts: [TranscriptFile]
 
+    public init(slug: String, url: URL, transcripts: [TranscriptFile]) {
+        self.slug = slug
+        self.url = url
+        self.transcripts = transcripts
+    }
+
     public var id: String { slug }
     public var lastActivity: Date { transcripts.first?.modifiedAt ?? .distantPast }
 }

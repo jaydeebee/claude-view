@@ -25,9 +25,9 @@ struct SidebarView: View {
                 }
             }
 
-            ForEach(model.historyProjects, id: \.project.id) { group in
-                Section(AppModel.displayName(forSlug: group.project.slug)) {
-                    ForEach(group.transcripts.prefix(15)) { transcript in
+            ForEach(model.historyProjects) { project in
+                Section(AppModel.displayName(forSlug: project.slug)) {
+                    ForEach(project.transcripts) { transcript in
                         HistorySessionRow(
                             transcript: transcript,
                             title: model.title(for: transcript),
@@ -35,7 +35,7 @@ struct SidebarView: View {
                         )
                         .tag(
                             SessionRef(
-                                projectSlug: group.project.slug,
+                                projectSlug: project.slug,
                                 sessionId: transcript.sessionId,
                                 url: transcript.url))
                     }
