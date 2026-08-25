@@ -37,3 +37,30 @@ import Testing
         }
     }
 }
+
+@Suite struct ResumeCommandDirectoryTests {
+    @Test func aKnownDirectoryIsCarriedAlong() {
+        #expect(
+            ResumeCommand.text(sessionId: "abc-123", directory: "/Users/jdb/src/etg-nxt")
+                == "cd /Users/jdb/src/etg-nxt && claude --resume abc-123")
+    }
+
+    /// No directory, no `cd` — the bare command, not a `cd` to nowhere.
+    @Test func anUnknownDirectoryIsOmitted() {
+        #expect(ResumeCommand.text(sessionId: "abc-123") == "claude --resume abc-123")
+        #expect(
+            ResumeCommand.text(sessionId: "abc-123", directory: nil)
+                == "claude --resume abc-123")
+        #expect(
+            ResumeCommand.text(sessionId: "abc-123", directory: "")
+                == "claude --resume abc-123")
+    }
+
+    /// Directories hold spaces far more often than session ids do.
+    @Test func anAwkwardDirectoryIsQuoted() {
+        #expect(
+            ResumeCommand.text(
+                sessionId: "abc-123", directory: "/Users/jdb/My Projects/etg nxt")
+                == "cd '/Users/jdb/My Projects/etg nxt' && claude --resume abc-123")
+    }
+}

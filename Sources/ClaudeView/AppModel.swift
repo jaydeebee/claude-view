@@ -117,6 +117,9 @@ final class AppModel {
     /// worker (they sit in Live above).
     var historyProjects: [ProjectListing] { state.projects }
 
+    /// Where a project's sessions ran, when a transcript could say.
+    func path(forSlug slug: String) -> String? { state.projectPaths[slug] }
+
     /// "-Users-x-src-app" reads poorly; show it relative to $HOME when possible.
     nonisolated static func displayName(forSlug slug: String) -> String {
         let homeSlug = ClaudePaths.projectSlug(

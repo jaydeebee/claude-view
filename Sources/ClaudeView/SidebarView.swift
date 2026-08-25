@@ -20,7 +20,9 @@ struct SidebarView: View {
                         )
                         .tag(live.ref)
                         .contextMenu {
-                            SessionCopyMenu(sessionId: live.ref.sessionId)
+                            SessionCopyMenu(
+                                sessionId: live.ref.sessionId,
+                                directory: live.session.cwd)
                         }
                         ForEach(model.sidebarAgents(for: live.ref)) { agent in
                             AgentTreeRow(agent: agent)
@@ -30,7 +32,7 @@ struct SidebarView: View {
             }
 
             ForEach(model.historyProjects) { project in
-                Section(AppModel.displayName(forSlug: project.slug)) {
+                Section {
                     ForEach(project.transcripts) { transcript in
                         HistorySessionRow(
                             transcript: transcript,
@@ -43,9 +45,14 @@ struct SidebarView: View {
                                 sessionId: transcript.sessionId,
                                 url: transcript.url))
                         .contextMenu {
-                            SessionCopyMenu(sessionId: transcript.sessionId)
+                            SessionCopyMenu(
+                                sessionId: transcript.sessionId,
+                                directory: model.path(forSlug: project.slug))
                         }
                     }
+                } header: {
+                    ProjectHeader(
+                        slug: project.slug, path: model.path(forSlug: project.slug))
                 }
             }
         }
@@ -124,12 +131,33 @@ struct LiveSessionRow: View {
 /// beside the bare id rather than making the reader assemble it.
 struct SessionCopyMenu: View {
     let sessionId: String
+    /// Where the session ran, so the resume command can carry the `cd`.
+    let directory: String?
 
     var body: some View {
         Button("Copy Session ID") { copyToPasteboard(sessionId) }
         Button("Copy Resume Command") {
-            copyToPasteboard(ResumeCommand.text(sessionId: sessionId))
+            copyToPasteboard(
+                ResumeCommand.text(sessionId: sessionId, directory: directory))
         }
+    }
+}
+
+/// A history group's heading: the directory its sessions ran in, shown
+/// the way the Live rows above already show theirs. The slug-derived
+/// name is the fallback for a project whose transcripts never said —
+/// it reads worse and can be ambiguous, but it is never wrong about
+/// which directory on disk the sessions were filed under.
+struct ProjectHeader: View {
+    let slug: String
+    let path: String?
+
+    var body: some View {
+        Text(path.map { ($0 as NSString).abbreviatingWithTildeInPath }
+            ?? AppModel.displayName(forSlug: slug))
+            .lineLimit(1)
+            .truncationMode(.head)
+            .help(path ?? slug)
     }
 }
 

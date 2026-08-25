@@ -14,6 +14,9 @@ struct SidebarState: Sendable {
     var agentActivity: [String: Date] = [:]
     var titles: [URL: String] = [:]
     var usage: [URL: ContextUsage] = [:]
+    /// Where each project's sessions actually ran, keyed by project slug.
+    /// Read from the transcripts rather than unpicked from the slug.
+    var projectPaths: [String: String] = [:]
 }
 
 /// Owns the scanning state — tailers, indexes, mtime-keyed caches — and
@@ -32,6 +35,7 @@ actor SidebarWorker {
     private var runCache: [URL: (dir: Date, journal: Date, run: WorkflowRun)] = [:]
     private var titleCache: [URL: (modifiedAt: Date, title: String?)] = [:]
     private var usageCache: [URL: (modifiedAt: Date, usage: ContextUsage?)] = [:]
+    private var cwdCache: [URL: String?] = [:]
 
     init(paths: ClaudePaths) {
         self.paths = paths
@@ -73,6 +77,12 @@ actor SidebarWorker {
                 state.titles[transcript.url] = title(for: transcript)
                 state.usage[transcript.url] = usage(for: transcript.url)
             }
+            state.projectPaths[project.slug] = projectPath(of: project)
+        }
+        // A live session knows its own directory without any reading.
+        for session in state.liveSessions {
+            guard let cwd = session.cwd else { continue }
+            state.projectPaths[ClaudePaths.projectSlug(for: cwd)] = cwd
         }
         return state
     }
@@ -128,6 +138,23 @@ actor SidebarWorker {
             runCache[runDir] = (stamps.0, stamps.1, run)
             return run
         }
+    }
+
+    /// Where a project's sessions ran. Cached without a timestamp on
+    /// purpose: a transcript's opening lines never change, so the answer
+    /// for a given file is settled the first time it is read. Newest
+    /// transcript first, so an abandoned old one cannot name the project.
+    private func projectPath(of project: ProjectListing) -> String? {
+        for transcript in project.transcripts {
+            if let cached = cwdCache[transcript.url] {
+                if let cwd = cached { return cwd }
+                continue
+            }
+            let cwd = TranscriptPeek.quickCwd(url: transcript.url)
+            cwdCache[transcript.url] = cwd
+            if let cwd { return cwd }
+        }
+        return nil
     }
 
     private func title(for transcript: TranscriptFile) -> String? {

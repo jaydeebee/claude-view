@@ -7,8 +7,14 @@ import Foundation
 /// it here keeps the shell quoting in one tested place rather than in a
 /// menu handler.
 public enum ResumeCommand {
-    public static func text(sessionId: String) -> String {
-        "claude --resume \(shellQuoted(sessionId))"
+    /// `claude --resume` looks for the session under the directory it is
+    /// run from, so the command carries the `cd` whenever the directory is
+    /// known — pasted anywhere, it lands in the right place. Without one,
+    /// it is the bare resume and the reader is on their own.
+    public static func text(sessionId: String, directory: String? = nil) -> String {
+        let resume = "claude --resume \(shellQuoted(sessionId))"
+        guard let directory, !directory.isEmpty else { return resume }
+        return "cd \(shellQuoted(directory)) && \(resume)"
     }
 
     /// A session id is a UUID today, but it reaches us from a filename we

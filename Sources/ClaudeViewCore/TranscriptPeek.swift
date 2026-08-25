@@ -45,6 +45,28 @@ public enum TranscriptPeek {
         return fallback
     }
 
+    /// The working directory the session ran in, read from the head of
+    /// the file.
+    ///
+    /// Every conversation entry carries `cwd`; the sidecars around them do
+    /// not, so this scans forward until one answers. The head, not the
+    /// tail, because the answer is settled by the first turn and a small
+    /// window is enough — measured across this machine's transcripts, the
+    /// first `cwd` always lands within the opening handful of lines.
+    ///
+    /// Worth reading rather than deriving: the project directory's name is
+    /// the cwd with every `/` turned into `-`, which a directory name
+    /// containing `-` makes ambiguous in the other direction.
+    public static func quickCwd(url: URL, window: Int = 1 << 14) -> String? {
+        for line in headLines(url: url, window: window) {
+            guard let entry = try? TranscriptEntry(line: Data(line), index: 0),
+                let cwd = entry.raw["cwd"]?.stringValue, !cwd.isEmpty
+            else { continue }
+            return cwd
+        }
+        return nil
+    }
+
     /// Context size as of the newest assistant turn in the tail window —
     /// the window is larger than the title's because a session can end on
     /// a bulky tool result. Nil when no turn is in reach.
@@ -82,6 +104,22 @@ public enum TranscriptPeek {
             total = sum
         }
         return total > 0 ? total : nil
+    }
+
+    /// The complete lines within the first `window` bytes of the file.
+    /// The last line is dropped unless the window reached the end, since
+    /// it may have been cut mid-write.
+    private static func headLines(url: URL, window: Int) -> [Data.SubSequence] {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: window), !data.isEmpty else {
+            return []
+        }
+        var lines = data.split(separator: UInt8(ascii: "\n"))
+        if data.count == window, !lines.isEmpty {
+            lines.removeLast()
+        }
+        return lines
     }
 
     /// The complete lines within the last `window` bytes of the file.
