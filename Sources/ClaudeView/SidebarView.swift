@@ -1,3 +1,4 @@
+import AppKit
 import ClaudeViewCore
 import SwiftUI
 
@@ -18,6 +19,9 @@ struct SidebarView: View {
                             usage: model.contextUsage(for: live.ref.url)
                         )
                         .tag(live.ref)
+                        .contextMenu {
+                            SessionCopyMenu(sessionId: live.ref.sessionId)
+                        }
                         ForEach(model.sidebarAgents(for: live.ref)) { agent in
                             AgentTreeRow(agent: agent)
                         }
@@ -38,6 +42,9 @@ struct SidebarView: View {
                                 projectSlug: project.slug,
                                 sessionId: transcript.sessionId,
                                 url: transcript.url))
+                        .contextMenu {
+                            SessionCopyMenu(sessionId: transcript.sessionId)
+                        }
                     }
                 }
             }
@@ -109,6 +116,26 @@ struct LiveSessionRow: View {
         guard let usage else { return base }
         return base + warmTokenText(" · " + tokenLabel(usage.contextTokens), usage: usage)
     }
+}
+
+/// Right-click actions on a session row. The id is what `claude
+/// --resume` takes, and copying it out of this window is the whole
+/// reason anyone asked to see it — so the command comes ready-made
+/// beside the bare id rather than making the reader assemble it.
+struct SessionCopyMenu: View {
+    let sessionId: String
+
+    var body: some View {
+        Button("Copy Session ID") { copyToPasteboard(sessionId) }
+        Button("Copy Resume Command") {
+            copyToPasteboard(ResumeCommand.text(sessionId: sessionId))
+        }
+    }
+}
+
+private func copyToPasteboard(_ string: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(string, forType: .string)
 }
 
 struct HistorySessionRow: View {
