@@ -105,7 +105,7 @@ import Testing
         into totals: inout (transcripts: Int, rows: Int, orphans: Int, pending: Int)
     ) {
         for case .info(_, let label) in snapshot.rows
-        where label == "orphan tool result" {
+        where label == SessionRow.orphanToolResultLabel {
             totals.orphans += 1
         }
         for case .toolCall(let call) in snapshot.rows where call.isPending {

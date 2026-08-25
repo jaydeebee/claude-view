@@ -52,8 +52,8 @@ enum DetailLevel: String, CaseIterable, Identifiable {
             return .everything
         case .thinking(_, let text) where text.isEmpty:
             return .everything
-        case .info(let entry, _):
-            return infoFloor(entry)
+        case .info(let entry, let label):
+            return infoFloor(entry, label: label)
         default:
             return .conversation
         }
@@ -68,7 +68,10 @@ enum DetailLevel: String, CaseIterable, Identifiable {
         "date_change", "plan_mode_exit",
     ]
 
-    private static func infoFloor(_ entry: TranscriptEntry) -> DetailLevel {
+    private static func infoFloor(_ entry: TranscriptEntry, label: String) -> DetailLevel {
+        // The assembler emits this rather than let a result whose call is
+        // missing disappear; filtering it out here would undo that.
+        if label == SessionRow.orphanToolResultLabel { return .conversation }
         switch entry.kind {
         case .attachment:
             let type = entry.raw["attachment"]?["type"]?.stringValue ?? ""

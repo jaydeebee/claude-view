@@ -175,7 +175,7 @@ import Testing
             Issue.record("expected info row for orphan result")
             return
         }
-        #expect(label == "orphan tool result")
+        #expect(label == SessionRow.orphanToolResultLabel)
     }
 
     @Test func subagentJoinsItsSpawningCall() throws {

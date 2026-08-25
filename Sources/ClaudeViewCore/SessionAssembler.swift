@@ -154,6 +154,11 @@ public enum SessionRow: Sendable {
     case bookkeeping(TranscriptEntry)
     case unknown(TranscriptEntry)
 
+    /// Label of the info row standing in for a tool result whose call is
+    /// missing. Named because display keys off it: a plain string in two
+    /// files drifts, and the row disappears again when it does.
+    public static let orphanToolResultLabel = "orphan tool result"
+
     /// Identifies the *entry* this row came from — several rows can share
     /// one. Row identity lives in `SessionSnapshot.rowIds`; deliberately
     /// not `id`, so nothing mistakes this for something unique.
@@ -483,7 +488,7 @@ public struct SessionAssembler: Sendable {
                     data.resultIsError = isError
                     snapshot.rows[rowIndex] = .toolCall(data)
                 } else {
-                    snapshot.rows.append(.info(entry, label: "orphan tool result"))
+                    snapshot.rows.append(.info(entry, label: SessionRow.orphanToolResultLabel))
                 }
             case .text(let text):
                 promptPieces.append(LocalCommandMarkup.commandPrompt(text) ?? text)
