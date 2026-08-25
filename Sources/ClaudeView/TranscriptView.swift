@@ -16,7 +16,7 @@ struct TranscriptView: View {
         Group {
             // The ref check matters: on session switch the old model is
             // still in state for a frame — never render it under a new ref.
-            if let model, model.ref == ref {
+            if let model, model.ref == ref, model.hasLoaded {
                 TranscriptLoadedView(
                     model: model, ref: ref, isLive: isLive, isBusy: isBusy,
                     onOpenSession: onOpenSession
@@ -32,14 +32,17 @@ struct TranscriptView: View {
             let model = TranscriptModel(
                 ref: ref, paths: paths, subagentsDir: ref.subagentsDir)
             model.isLive = isLive
-            model.poll()
             self.model = model
+            // The first load reads and folds the whole file — off the main
+            // actor, so a 30MB session spins rather than freezes.
+            await model.poll()
 
             // FSEvents refreshes the sidebar; the open transcript re-polls
             // on a heartbeat. poll() is an lseek+compare when idle.
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
-                model.poll()
+                guard !Task.isCancelled else { return }
+                await model.poll()
             }
         }
         .onChange(of: isLive) {
