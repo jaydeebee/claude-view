@@ -133,7 +133,10 @@ actor SidebarWorker {
         let dir = paths.subagentsDir(
             projectSlug: parent.projectSlug, sessionId: parent.sessionId)
         let index = subagentIndex(dir: dir)
-        guard !index.byAgentId.isEmpty else { return [] }
+        // Workflow agents live a directory deeper, one subtree per run.
+        let runNodes = WorkflowRunIndex.load(subagentsDir: dir)
+            .map { workflowNode(for: $0, parent: parent) }
+        guard !index.byAgentId.isEmpty else { return runNodes }
         let byParent = Dictionary(
             grouping: index.byAgentId.values, by: { $0.parentAgentId })
         // The only tool results worth reading are the ones answering a
@@ -178,7 +181,43 @@ actor SidebarWorker {
         return build(
             parentAgentId: nil,
             events: completionScanner.poll(parent.url, watching: watched),
-            depth: 0)
+            depth: 0) + runNodes
+    }
+
+    /// A workflow run as one collapsible node: the run's agents are its
+    /// children in start order, done-ness straight from the journal — a
+    /// serial run shows one spinner and a growing train of checkmarks.
+    private func workflowNode(for run: WorkflowRun, parent: SessionRef) -> ActiveSubagent {
+        let children = run.agents.enumerated().map { n, agent -> ActiveSubagent in
+            let values = try? agent.transcriptURL.resourceValues(
+                forKeys: [.creationDateKey, .contentModificationDateKey])
+            let mtime = values?.contentModificationDate ?? .distantPast
+            return ActiveSubagent(
+                ref: SessionRef(
+                    projectSlug: parent.projectSlug,
+                    sessionId: "agent-\(agent.agentId)",
+                    url: agent.transcriptURL,
+                    subagentsDir: run.dir),
+                title: agent.name ?? "agent \(n + 1)",
+                detail: agent.taskDescription,
+                startedAt: values?.creationDate,
+                lastActivity: mtime,
+                completedAt: run.finished.contains(agent.agentId) ? mtime : nil)
+        }
+        return ActiveSubagent(
+            ref: SessionRef(
+                projectSlug: parent.projectSlug,
+                sessionId: "wfrun-\(run.runId)",
+                url: run.journalURL,
+                subagentsDir: run.dir),
+            title: run.name ?? run.runId,
+            // Short by construction: the sidebar middle-truncates this
+            // line, and a chewed "32/45" reads as a plausible wrong count.
+            detail: "\(run.finished.count)/\(run.agents.count) agents",
+            startedAt: children.first?.startedAt,
+            lastActivity: modificationDate(of: run.journalURL),
+            completedAt: nil,
+            children: children)
     }
 
     /// When the spawner heard this agent stop: a task-notification naming
