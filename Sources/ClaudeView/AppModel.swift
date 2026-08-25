@@ -218,6 +218,9 @@ extension AppModel {
         guard !index.byAgentId.isEmpty else { return [] }
         let byParent = Dictionary(
             grouping: index.byAgentId.values, by: { $0.parentAgentId })
+        // The only tool results worth reading are the ones answering a
+        // Task call that spawned one of these agents.
+        let watched = Set(index.byToolUseId.keys)
         var visited = Set<String>()
 
         func build(
@@ -249,12 +252,15 @@ extension AppModel {
                             ? []
                             : build(
                                 parentAgentId: agent.agentId,
-                                events: completionScanner.poll(agent.transcriptURL),
+                                events: completionScanner.poll(
+                                    agent.transcriptURL, watching: watched),
                                 depth: depth + 1))
                 }
         }
         return build(
-            parentAgentId: nil, events: completionScanner.poll(parent.url), depth: 0)
+            parentAgentId: nil,
+            events: completionScanner.poll(parent.url, watching: watched),
+            depth: 0)
     }
 
     /// When the spawner heard this agent stop: a task-notification naming

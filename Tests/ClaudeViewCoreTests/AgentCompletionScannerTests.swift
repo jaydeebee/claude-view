@@ -67,7 +67,8 @@ import Testing
         defer { try? FileManager.default.removeItem(at: url) }
         try append(Self.toolResult + "\n", to: url)
 
-        let events = AgentCompletionScanner().poll(url)
+        // The watch set is what makes a tool result worth parsing.
+        let events = AgentCompletionScanner().poll(url, watching: ["toolu_777"])
         #expect(events.byToolUseId["toolu_777"]
             == TranscriptEntry.parseTimestamp("2026-08-23T10:05:00.000Z"))
         #expect(events.byAgentId.isEmpty)
@@ -94,7 +95,7 @@ import Testing
         #expect(scanner.poll(url).byAgentId.count == 1)
 
         try append(Self.toolResult + "\n", to: url)
-        let events = scanner.poll(url)
+        let events = scanner.poll(url, watching: ["toolu_777"])
         #expect(events.byAgentId.count == 1)
         #expect(events.byToolUseId.count == 1)
 
