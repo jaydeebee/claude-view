@@ -15,6 +15,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION="${1:?usage: make-release.sh <version>}"
+# Every tag here is v-prefixed, so passing the version as it appears in
+# `git tag` is the obvious mistake. It used to be a silent one: the
+# bundle was stamped "v0.3.2", which the app's own update check cannot
+# parse, so the shipped build would never see another update.
+VERSION="${VERSION#[vV]}"
+if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+    echo "error: version must be dotted numeric, got '${1}'" >&2
+    exit 1
+fi
 APP="dist/Claude View.app"
 ZIP="dist/ClaudeView-${VERSION}.zip"
 
