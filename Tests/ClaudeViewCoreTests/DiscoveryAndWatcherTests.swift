@@ -67,4 +67,50 @@ import Testing
 
         #expect(fired.wait(timeout: .now() + 5) == .success)
     }
+
+    /// Closing a window drops a watcher while its directory is still being
+    /// written, and a callback can be mid-flight when it goes. Teardown
+    /// must wait for that callback rather than free the handler underneath
+    /// it — asserted by the clock here, and by ASan on the freeing itself
+    /// (`swift test --sanitize=address`).
+    @Test func teardownWaitsForAnInFlightCallback() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("watch-teardown-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let entered = DispatchSemaphore(value: 0)
+        let handlerWork = 0.3
+        let lock = NSLock()
+        var firstEntry: Date?
+        var watcher: FSEventsWatcher? = FSEventsWatcher(
+            paths: [dir.path], latency: 0.01
+        ) { _ in
+            lock.lock()
+            if firstEntry == nil { firstEntry = Date() }
+            lock.unlock()
+            entered.signal()
+            Thread.sleep(forTimeInterval: handlerWork)
+        }
+        #expect(watcher != nil)
+
+        Thread.sleep(forTimeInterval: 0.2)  // let the stream start
+        try Data("hello".utf8).write(to: dir.appendingPathComponent("new.jsonl"))
+        #expect(entered.wait(timeout: .now() + 5) == .success)
+
+        // A callback is in flight; stop() must not return before it ends.
+        // Timed from when the handler actually began, since an event can
+        // land while the stream is still starting up.
+        watcher?.stop()
+        let returned = Date()
+        watcher = nil
+
+        lock.lock()
+        let began = firstEntry
+        lock.unlock()
+        let waited = began.map { returned.timeIntervalSince($0) } ?? 0
+        #expect(
+            waited > handlerWork * 0.8,
+            "stop() returned \(waited)s after the callback began, before it could finish")
+    }
 }
