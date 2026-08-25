@@ -60,7 +60,10 @@ enum InfoPresentation {
     private static func systemDetail(subtype: String, entry: TranscriptEntry) -> String? {
         switch subtype {
         case "turn_duration":
-            guard let ms = entry.raw["durationMs"]?.doubleValue else { return nil }
+            // JSON happily carries -1e19 here; Int(_:) would trap on it.
+            guard let ms = entry.raw["durationMs"]?.doubleValue,
+                ms.isFinite, ms >= 0
+            else { return nil }
             return ms < 1000 ? "\(Int(ms))ms" : String(format: "%.1fs", ms / 1000)
         case "local_command":
             return commandOutput(of: entry).map(firstLine)

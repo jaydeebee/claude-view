@@ -107,6 +107,31 @@ import Testing
         #expect(note.toolUses == 24)
     }
 
+    @Test func unshowableDurationsAreDropped() throws {
+        for value in ["inf", "-inf", "nan", "1e400", "-1", "0x1p2000"] {
+            let line = """
+                {"type":"user","uuid":"u-d","message":{"role":"user","content":"<task-notification>\\n<task-id>t1</task-id>\\n<duration_ms>\(value)</duration_ms>\\n</task-notification>"}}
+                """
+            let snapshot = SessionAssembler().assemble(entries: try entries([line]))
+            guard case .taskNotification(let note) = snapshot.rows.first else {
+                Issue.record("expected a taskNotification row for \(value)")
+                return
+            }
+            // Admitting these means a trapping Int() conversion downstream.
+            #expect(note.durationMs == nil, "\(value) should not be displayable")
+        }
+
+        let good = """
+            {"type":"user","uuid":"u-ok","message":{"role":"user","content":"<task-notification>\\n<task-id>t2</task-id>\\n<duration_ms>1500</duration_ms>\\n</task-notification>"}}
+            """
+        let snapshot = SessionAssembler().assemble(entries: try entries([good]))
+        guard case .taskNotification(let note) = snapshot.rows.first else {
+            Issue.record("expected a taskNotification row")
+            return
+        }
+        #expect(note.durationMs == 1500)
+    }
+
     @Test func wrappedNotificationInSubagentTranscriptIsStillANotification() throws {
         // How a subagent transcript carries it: isMeta, and the block sits
         // behind the harness preamble instead of leading the entry.

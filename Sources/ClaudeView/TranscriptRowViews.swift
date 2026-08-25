@@ -592,14 +592,17 @@ struct TaskNotificationRowView: View {
     /// "7m 4s · 75,210 tokens · 24 tools" — whatever the usage block held.
     private var vitalsText: String? {
         var parts: [String] = []
-        if let ms = note.durationMs {
+        // Guarded here as well as at parse time: the formatter must be safe
+        // on whatever it is handed, not just on what today's parser admits.
+        if let ms = note.durationMs, ms.isFinite, ms >= 0 {
             if ms < 1000 {
                 parts.append("\(Int(ms))ms")
             } else if ms < 60_000 {
                 parts.append(String(format: "%.1fs", ms / 1000))
-            } else {
-                let seconds = Int(ms / 1000)
+            } else if let seconds = Int(exactly: (ms / 1000).rounded(.down)) {
                 parts.append("\(seconds / 60)m \(seconds % 60)s")
+            } else {
+                parts.append(String(format: "%.0fs", ms / 1000))
             }
         }
         if let tokens = note.subagentTokens {

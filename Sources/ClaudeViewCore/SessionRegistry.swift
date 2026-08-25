@@ -10,7 +10,9 @@ public struct RegistrySession: Sendable, Identifiable {
     }
 
     public var id: String { sessionId ?? "pid-\(pid ?? 0)" }
-    public var pid: Int32? { raw["pid"]?.intValue.map(Int32.init) }
+    /// Failable on purpose: a pid outside Int32 is a malformed entry to
+    /// skip, not a reason to abort the app on every launch.
+    public var pid: Int32? { raw["pid"]?.intValue.flatMap(Int32.init(exactly:)) }
     public var sessionId: String? { raw["sessionId"]?.stringValue }
     public var cwd: String? { raw["cwd"]?.stringValue }
     /// Human-readable name Claude Code derives for the session.

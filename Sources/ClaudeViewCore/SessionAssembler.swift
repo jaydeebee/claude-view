@@ -371,7 +371,8 @@ public struct SessionAssembler: Sendable {
                         status: trimmedTag("status", in: block),
                         summary: trimmedTag("summary", in: block),
                         result: trimmedTag("result", in: block),
-                        durationMs: trimmedTag("duration_ms", in: block).flatMap(Double.init),
+                        durationMs: trimmedTag("duration_ms", in: block)
+                            .flatMap(Double.init).flatMap(Self.displayableDuration),
                         subagentTokens: trimmedTag("subagent_tokens", in: block).flatMap(Int64.init),
                         toolUses: trimmedTag("tool_uses", in: block).flatMap(Int64.init),
                         subagent: subagent)))
@@ -435,6 +436,13 @@ public struct SessionAssembler: Sendable {
         else { return nil }
         let digits = inner.trimmingCharacters(in: .whitespaces).prefix(while: \.isNumber)
         return Int64(digits)
+    }
+
+    /// `Double("inf")`, `Double("nan")` and `Double("1e400")` all succeed,
+    /// and a duration the formatter can't render is worse than none —
+    /// converting it to Int downstream traps. Keep only what can be shown.
+    static func displayableDuration(_ ms: Double) -> Double? {
+        ms.isFinite && ms >= 0 && ms < 1e15 ? ms : nil
     }
 
     private func trimmedTag(_ tag: String, in text: String) -> String? {

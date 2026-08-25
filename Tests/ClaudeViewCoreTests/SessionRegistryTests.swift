@@ -69,4 +69,17 @@ import Testing
             .write(to: paths.sessionsDir.appendingPathComponent("broken.json"))
         #expect(SessionRegistry(paths: paths).liveSessions().isEmpty)
     }
+
+    @Test func pidTooLargeForInt32IsSkippedNotFatal() throws {
+        let paths = try makeFakeClaudeHome()
+        defer { try? FileManager.default.removeItem(at: paths.home) }
+        try Data(#"{"pid":3000000000,"sessionId":"s-huge","cwd":"/tmp"}"#.utf8)
+            .write(to: paths.sessionsDir.appendingPathComponent("huge.json"))
+
+        // The trapping conversion here aborted the whole app, and
+        // liveSessions() reads pid for every file it finds.
+        let sessions = SessionRegistry(paths: paths).liveSessions()
+        #expect(sessions.isEmpty)
+        #expect(RegistrySession(raw: try JSONValue(data: Data(#"{"pid":3000000000}"#.utf8))).pid == nil)
+    }
 }
