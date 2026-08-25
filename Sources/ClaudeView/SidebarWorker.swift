@@ -90,6 +90,18 @@ actor SidebarWorker {
             .contentModificationDate ?? .distantPast
     }
 
+    /// Asked by path, not through the URL. A `URL` memoizes its resource
+    /// values, and these come out of the cached subagent index — statting
+    /// through them reports whatever was true when the cache was filled,
+    /// which freezes every agent's activity while it is still writing.
+    private func timestamps(of url: URL) -> (created: Date?, modified: Date) {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return (
+            attributes?[.creationDate] as? Date,
+            attributes?[.modificationDate] as? Date ?? .distantPast
+        )
+    }
+
     /// Reloaded only when the directory changes — every meta in it is
     /// otherwise re-read and re-parsed on every refresh.
     private func subagentIndex(dir: URL) -> SubagentIndex {
@@ -151,10 +163,8 @@ actor SidebarWorker {
             return (byParent[parentAgentId] ?? [])
                 .compactMap { agent -> (SubagentRef, Date?, Date)? in
                     guard visited.insert(agent.agentId).inserted else { return nil }
-                    let values = try? agent.transcriptURL.resourceValues(
-                        forKeys: [.creationDateKey, .contentModificationDateKey])
-                    return (agent, values?.creationDate,
-                            values?.contentModificationDate ?? .distantPast)
+                    let stamps = timestamps(of: agent.transcriptURL)
+                    return (agent, stamps.created, stamps.modified)
                 }
                 .sorted { ($0.1 ?? .distantPast) < ($1.1 ?? .distantPast) }
                 .map { agent, created, mtime in
@@ -189,9 +199,8 @@ actor SidebarWorker {
     /// serial run shows one spinner and a growing train of checkmarks.
     private func workflowNode(for run: WorkflowRun, parent: SessionRef) -> ActiveSubagent {
         let children = run.agents.enumerated().map { n, agent -> ActiveSubagent in
-            let values = try? agent.transcriptURL.resourceValues(
-                forKeys: [.creationDateKey, .contentModificationDateKey])
-            let mtime = values?.contentModificationDate ?? .distantPast
+            let stamps = timestamps(of: agent.transcriptURL)
+            let mtime = stamps.modified
             return ActiveSubagent(
                 ref: SessionRef(
                     projectSlug: parent.projectSlug,
@@ -200,7 +209,7 @@ actor SidebarWorker {
                     subagentsDir: run.dir),
                 title: agent.name ?? "agent \(n + 1)",
                 detail: agent.taskDescription,
-                startedAt: values?.creationDate,
+                startedAt: stamps.created,
                 lastActivity: mtime,
                 completedAt: run.finished.contains(agent.agentId) ? mtime : nil)
         }

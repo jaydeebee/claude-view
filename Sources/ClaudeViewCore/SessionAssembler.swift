@@ -357,10 +357,13 @@ public struct SessionAssembler: Sendable {
         else { return false }
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // A notification is one wherever the block sits: session
-        // transcripts lead with it, subagent transcripts bury it behind a
-        // [SYSTEM NOTIFICATION] preamble and mark the entry isMeta.
-        if let block = LocalCommandMarkup.tagContent("task-notification", in: text) {
+        // A notification either leads the entry (session transcripts) or
+        // sits behind the harness preamble on a meta entry (subagent
+        // ones). Anywhere else the tag is just something someone typed —
+        // agent prompts quote it, and those are prompts.
+        if entry.isMeta || text.hasPrefix("<task-notification>"),
+            let block = LocalCommandMarkup.tagContent("task-notification", in: text)
+        {
             let taskId = LocalCommandMarkup.tagContent("task-id", in: block)
             var subagent = taskId.flatMap { subagents.byAgentId[$0] }
             if subagent == nil,

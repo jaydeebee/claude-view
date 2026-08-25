@@ -80,17 +80,18 @@ import Testing
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let entered = DispatchSemaphore(value: 0)
-        let handlerWork = 0.3
         let lock = NSLock()
-        var firstEntry: Date?
-        var watcher: FSEventsWatcher? = FSEventsWatcher(
-            paths: [dir.path], latency: 0.01
-        ) { _ in
+        var running = 0
+        var finished = 0
+        let watcher = FSEventsWatcher(paths: [dir.path], latency: 0.01) { _ in
             lock.lock()
-            if firstEntry == nil { firstEntry = Date() }
+            running += 1
             lock.unlock()
             entered.signal()
-            Thread.sleep(forTimeInterval: handlerWork)
+            Thread.sleep(forTimeInterval: 0.3)
+            lock.lock()
+            finished += 1
+            lock.unlock()
         }
         #expect(watcher != nil)
 
@@ -98,19 +99,17 @@ import Testing
         try Data("hello".utf8).write(to: dir.appendingPathComponent("new.jsonl"))
         #expect(entered.wait(timeout: .now() + 5) == .success)
 
-        // A callback is in flight; stop() must not return before it ends.
-        // Timed from when the handler actually began, since an event can
-        // land while the stream is still starting up.
+        // Assert the fact rather than a duration: however slow or fast this
+        // machine is, every callback that started must have finished by the
+        // time stop() returns, or the release freed the handler under one.
         watcher?.stop()
-        let returned = Date()
-        watcher = nil
 
         lock.lock()
-        let began = firstEntry
+        let (started, done) = (running, finished)
         lock.unlock()
-        let waited = began.map { returned.timeIntervalSince($0) } ?? 0
+        #expect(started > 0, "no callback was in flight — the test proved nothing")
         #expect(
-            waited > handlerWork * 0.8,
-            "stop() returned \(waited)s after the callback began, before it could finish")
+            done == started,
+            "stop() returned with \(started - done) of \(started) callbacks still running")
     }
 }

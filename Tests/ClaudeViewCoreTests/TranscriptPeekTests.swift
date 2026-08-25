@@ -67,6 +67,23 @@ import Testing
         #expect(usage.warmUntil == usage.at.addingTimeInterval(300))
     }
 
+    @Test func absurdTokenCountsAreRejectedNotSummed() throws {
+        // Int + Int aborts the process on overflow, and these three numbers
+        // come out of a file the app does not control. The bad turn must be
+        // the newest one, since that is the only turn quickUsage reads.
+        let overflowing = try write([
+            #"{"type":"assistant","uuid":"a1","timestamp":"2026-08-23T10:00:00Z","message":{"role":"assistant","usage":{"input_tokens":9223372036854775807,"cache_read_input_tokens":1,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"hi"}]}}"#
+        ])
+        defer { try? FileManager.default.removeItem(at: overflowing) }
+        #expect(TranscriptPeek.quickUsage(url: overflowing) == nil)
+
+        let negative = try write([
+            #"{"type":"assistant","uuid":"a2","timestamp":"2026-08-23T09:00:00Z","message":{"role":"assistant","usage":{"input_tokens":-5,"cache_read_input_tokens":10,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"hi"}]}}"#
+        ])
+        defer { try? FileManager.default.removeItem(at: negative) }
+        #expect(TranscriptPeek.quickUsage(url: negative) == nil)
+    }
+
     @Test func oneHourCacheWritesBuyTheLongClock() throws {
         let url = try write([
             #"{"type":"assistant","uuid":"a1","timestamp":"2026-08-23T10:00:00Z","message":{"role":"assistant","usage":{"input_tokens":2,"cache_read_input_tokens":500,"cache_creation_input_tokens":40,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":40}},"content":[{"type":"text","text":"hi"}]}}"#

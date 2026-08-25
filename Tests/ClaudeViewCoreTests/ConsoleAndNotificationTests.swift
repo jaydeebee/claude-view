@@ -148,6 +148,20 @@ import Testing
         #expect(note.summary == "Agent \"Explore\" finished")
     }
 
+    @Test func aPromptThatQuotesANotificationStaysAPrompt() throws {
+        // Agent prompts quote the tag when describing the format; five such
+        // entries exist in this machine's transcripts. They are prompts.
+        let quoting = """
+            {"type":"user","uuid":"u-quote","message":{"role":"user","content":"Here is what the harness writes:\\n<task-notification>\\n<task-id>t9</task-id>\\n</task-notification>\\nExplain it."}}
+            """
+        let snapshot = SessionAssembler().assemble(entries: try entries([quoting]))
+        guard case .prompt(_, let text) = snapshot.rows.first else {
+            Issue.record("expected a prompt row, got \(String(describing: snapshot.rows.first))")
+            return
+        }
+        #expect(text.contains("Explain it."))
+    }
+
     @Test func userTaskNotificationCompletesItsFork() throws {
         let launchLine = """
             {"type":"system","subtype":"local_command","isMeta":false,"level":"info","uuid":"sys-1","content":"<local-command-stdout>Running in the background as @code-review</local-command-stdout>\\n<forked-skill-launch>{\\"agentId\\":\\"fork123\\",\\"skillName\\":\\"code-review\\",\\"description\\":\\"/code-review\\"}</forked-skill-launch>"}

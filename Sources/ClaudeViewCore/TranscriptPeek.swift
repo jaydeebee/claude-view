@@ -55,11 +55,7 @@ public enum TranscriptPeek {
                 let usage = entry.usage,
                 let at = entry.timestamp
             else { continue }
-            let context =
-                (usage["input_tokens"]?.intValue ?? 0)
-                + (usage["cache_read_input_tokens"]?.intValue ?? 0)
-                + (usage["cache_creation_input_tokens"]?.intValue ?? 0)
-            guard context > 0 else { continue }
+            guard let context = contextTokens(of: usage) else { continue }
             // The usage names which TTL the cache write bought; entries
             // predating the breakdown default to the short clock.
             let oneHour =
@@ -70,6 +66,22 @@ public enum TranscriptPeek {
                 cacheTTL: oneHour > 0 ? 3600 : 300)
         }
         return nil
+    }
+
+    /// What a cache-cold resume would reprocess: the prompt as the API
+    /// last saw it. Summed without trapping — these are three numbers
+    /// read out of a file the app does not control, and `+` on Int
+    /// aborts the process on overflow.
+    private static func contextTokens(of usage: JSONValue) -> Int64? {
+        var total: Int64 = 0
+        for key in ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"] {
+            guard let value = usage[key]?.intValue else { continue }
+            guard value >= 0 else { return nil }
+            let (sum, overflowed) = total.addingReportingOverflow(Int64(value))
+            guard !overflowed else { return nil }
+            total = sum
+        }
+        return total > 0 ? total : nil
     }
 
     /// The complete lines within the last `window` bytes of the file.
