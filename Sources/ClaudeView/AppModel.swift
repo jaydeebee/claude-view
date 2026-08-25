@@ -66,6 +66,14 @@ final class AppModel {
         }
     }
 
+    /// Called when the window goes away. Deallocation alone can't be
+    /// trusted to do this — SwiftUI may hold @State for a while — and a
+    /// live watcher keeps firing refreshes for a window nobody can see.
+    func stop() {
+        watcher?.stop()
+        watcher = nil
+    }
+
     func refresh() {
         liveSessions = registry.liveSessions()
         projects = discovery.projects()
@@ -293,14 +301,4 @@ extension AppModel {
         return (live != nil, live?.session.status == "busy")
     }
 
-    /// FSEvents drives refresh while files change; this slow heartbeat lets
-    /// agent states age in the sidebar.
-    func startHeartbeat() {
-        Task { @MainActor [weak self] in
-            while let self, !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(15))
-                self.refresh()
-            }
-        }
-    }
 }

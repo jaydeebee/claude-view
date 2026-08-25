@@ -33,8 +33,19 @@ struct ContentView: View {
         }
         .task {
             model.start()
-            model.startHeartbeat()
             await updates.startupCheck()
         }
+        // FSEvents drives refresh while files change; this slow heartbeat
+        // lets agent states age. Structured, so closing the window
+        // cancels it — an unstructured Task would outlive the window and
+        // keep its model, watcher and caches alive for the whole process.
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                guard !Task.isCancelled else { return }
+                model.refresh()
+            }
+        }
+        .onDisappear { model.stop() }
     }
 }
