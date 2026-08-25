@@ -94,10 +94,16 @@ import Testing
                 + "\(totals.pending) pending calls")
     }
 
+    /// Recursive on purpose: workflow agents live a directory deeper, in
+    /// subagents/workflows/wf_<id>/, and that is where every multi-block
+    /// entry in this corpus turned out to be. A single-level listing
+    /// walked 89 files and saw none of them.
     private func subagentTranscripts(in dir: URL) -> [URL] {
-        let files = (try? FileManager.default.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: nil)) ?? []
-        return files.filter { $0.pathExtension == "jsonl" }
+        guard let walk = FileManager.default.enumerator(
+            at: dir, includingPropertiesForKeys: nil)
+        else { return [] }
+        return walk.compactMap { $0 as? URL }
+            .filter { $0.pathExtension == "jsonl" && $0.lastPathComponent != "journal.jsonl" }
     }
 
     private func countInterestingRows(
