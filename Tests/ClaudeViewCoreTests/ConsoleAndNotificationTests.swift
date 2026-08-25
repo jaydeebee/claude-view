@@ -107,6 +107,22 @@ import Testing
         #expect(note.toolUses == 24)
     }
 
+    @Test func wrappedNotificationInSubagentTranscriptIsStillANotification() throws {
+        // How a subagent transcript carries it: isMeta, and the block sits
+        // behind the harness preamble instead of leading the entry.
+        let wrapped = """
+            {"type":"user","uuid":"u-wrapped","isMeta":true,"message":{"role":"user","content":"[SYSTEM NOTIFICATION - NOT USER INPUT]\\nThis is an automated background-task event.\\n\\n<task-notification>\\n<task-id>child7</task-id>\\n<tool-use-id>toolu_child7</tool-use-id>\\n<status>completed</status>\\n<summary>Agent \\"Explore\\" finished</summary>\\n</task-notification>"}}
+            """
+        let snapshot = SessionAssembler().assemble(entries: try entries([wrapped]))
+        guard case .taskNotification(let note) = snapshot.rows.first else {
+            Issue.record("expected a taskNotification row, got \(String(describing: snapshot.rows.first))")
+            return
+        }
+        #expect(note.taskId == "child7")
+        #expect(note.status == "completed")
+        #expect(note.summary == "Agent \"Explore\" finished")
+    }
+
     @Test func userTaskNotificationCompletesItsFork() throws {
         let launchLine = """
             {"type":"system","subtype":"local_command","isMeta":false,"level":"info","uuid":"sys-1","content":"<local-command-stdout>Running in the background as @code-review</local-command-stdout>\\n<forked-skill-launch>{\\"agentId\\":\\"fork123\\",\\"skillName\\":\\"code-review\\",\\"description\\":\\"/code-review\\"}</forked-skill-launch>"}

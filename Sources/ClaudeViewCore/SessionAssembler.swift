@@ -347,17 +347,19 @@ public struct SessionAssembler: Sendable {
         openForks: inout [String: Int],
         openConsole: inout Int?
     ) -> Bool {
-        guard !entry.isMeta,
-            entry.contentBlocks.count == 1,
+        guard entry.contentBlocks.count == 1,
             case .text(let raw)? = entry.contentBlocks.first
         else { return false }
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if text.hasPrefix("<task-notification>") {
-            let taskId = LocalCommandMarkup.tagContent("task-id", in: text)
+        // A notification is one wherever the block sits: session
+        // transcripts lead with it, subagent transcripts bury it behind a
+        // [SYSTEM NOTIFICATION] preamble and mark the entry isMeta.
+        if let block = LocalCommandMarkup.tagContent("task-notification", in: text) {
+            let taskId = LocalCommandMarkup.tagContent("task-id", in: block)
             var subagent = taskId.flatMap { subagents.byAgentId[$0] }
             if subagent == nil,
-                let toolUseId = LocalCommandMarkup.tagContent("tool-use-id", in: text)
+                let toolUseId = LocalCommandMarkup.tagContent("tool-use-id", in: block)
             {
                 subagent = subagents.byToolUseId[toolUseId]
             }
@@ -366,18 +368,22 @@ public struct SessionAssembler: Sendable {
                     TaskNotificationRowData(
                         entry: entry,
                         taskId: taskId,
-                        status: trimmedTag("status", in: text),
-                        summary: trimmedTag("summary", in: text),
-                        result: trimmedTag("result", in: text),
-                        durationMs: trimmedTag("duration_ms", in: text).flatMap(Double.init),
-                        subagentTokens: trimmedTag("subagent_tokens", in: text).flatMap(Int64.init),
-                        toolUses: trimmedTag("tool_uses", in: text).flatMap(Int64.init),
+                        status: trimmedTag("status", in: block),
+                        summary: trimmedTag("summary", in: block),
+                        result: trimmedTag("result", in: block),
+                        durationMs: trimmedTag("duration_ms", in: block).flatMap(Double.init),
+                        subagentTokens: trimmedTag("subagent_tokens", in: block).flatMap(Int64.init),
+                        toolUses: trimmedTag("tool_uses", in: block).flatMap(Int64.init),
                         subagent: subagent)))
             if let taskId {
                 completeFork(taskId: taskId, in: &snapshot, openForks: &openForks)
             }
             return true
         }
+
+        // The console shapes below are only ever the user's own doing, so
+        // injected context stays out of them.
+        guard !entry.isMeta else { return false }
 
         if text.hasPrefix("<bash-input>") {
             let command = trimmedTag("bash-input", in: text)
