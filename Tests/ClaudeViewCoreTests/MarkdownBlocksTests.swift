@@ -29,6 +29,27 @@ import Testing
         #expect(plain(blocks[1]) == "4eca946 Charter\n8118ac1 Scaffold")
     }
 
+    @Test func softLineBreaksSurviveAsLineBreaks() {
+        // Same failure as the fence one, one level down: hard-wrapped
+        // prose was hoisted onto a single line by CommonMark's
+        // soft-break-to-space rule.
+        let blocks = MarkdownBlocks.parse("line one\nline two\nline three")
+        #expect(blocks.count == 1)
+        #expect(plain(blocks[0]) == "line one\nline two\nline three")
+
+        let item = MarkdownBlocks.parse("- one\n  two")
+        #expect(plain(item[0]) == "one\ntwo")
+
+        let quote = MarkdownBlocks.parse("> one\n> two")
+        #expect(plain(quote[0]) == "one\ntwo")
+
+        // A blank line is still a paragraph break, not a run of newlines.
+        let paras = MarkdownBlocks.parse("first\n\nsecond")
+        #expect(paras.count == 2)
+        #expect(plain(paras[0]) == "first")
+        #expect(plain(paras[1]) == "second")
+    }
+
     @Test func languageHintSurvives() {
         let blocks = MarkdownBlocks.parse("```swift\nlet x = 1\n```")
         guard case .code(let language) = blocks.first?.kind else {

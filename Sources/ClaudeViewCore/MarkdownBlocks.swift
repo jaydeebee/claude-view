@@ -47,6 +47,15 @@ public enum MarkdownBlocks {
         for run in attributed.runs {
             var piece = AttributedString(attributed[run.range])
             piece.presentationIntent = nil
+            // CommonMark turns a soft break into a space, which folds a
+            // hard-wrapped paragraph onto one line — the very thing block
+            // rendering exists to prevent. Put the break back.
+            if run.inlinePresentationIntent?.contains(.softBreak) == true {
+                var newline = AttributedString("\n")
+                newline.setAttributes(piece.runs.first?.attributes ?? .init())
+                newline.inlinePresentationIntent = nil
+                piece = newline
+            }
             builder.add(piece, components: run.presentationIntent?.components ?? [])
         }
         builder.finish()
