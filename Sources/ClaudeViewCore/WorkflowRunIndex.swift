@@ -3,10 +3,13 @@ import Foundation
 /// One workflow run under a session: agents spawned by a Workflow
 /// script, living in `subagents/workflows/wf_<id>/` beside a journal.
 ///
-/// The journal is the lifecycle truth: a `started` entry when an agent
-/// spawns, a terminal entry (`result`, or an error) when it stops. It
-/// carries no timestamps, so completion times fall back to the agent
-/// transcript's final write.
+/// The journal is the lifecycle truth, as far as it goes: a `started`
+/// entry when an agent spawns and a `result` when one returns. Those are
+/// the only two shapes it writes — an agent that throws gets a `started`
+/// and nothing more — so a missing result means "no answer yet", not
+/// "still working". `isComplete` is what tells those apart. The journal
+/// carries no timestamps either, so completion times fall back to the
+/// agent transcript's final write.
 public struct WorkflowRun: Sendable {
     public let runId: String
     /// From the persisted script's filename (`<name>-<runId>.js`).
@@ -18,11 +21,22 @@ public struct WorkflowRun: Sendable {
     public let agents: [SubagentRef]
     /// Agent ids the journal marks terminal.
     public let finished: Set<String>
+    /// Whether the run itself has stopped. An agent with no result is
+    /// abandoned rather than working once this is true — the journal has
+    /// no error entry to say so on the agent's behalf.
+    public let isComplete: Bool
 }
 
 public enum WorkflowRunIndex {
     /// All workflow runs under a session's subagents dir, oldest first.
     public static func load(subagentsDir: URL) -> [WorkflowRun] {
+        runDirectories(subagentsDir: subagentsDir)
+            .map { load(runDir: $0, subagentsDir: subagentsDir) }
+    }
+
+    /// Just the run directories, oldest first — the cheap half of a load,
+    /// so a caller holding a cache can decide what is worth reading.
+    public static func runDirectories(subagentsDir: URL) -> [URL] {
         let fm = FileManager.default
         let workflowsDir = subagentsDir.appendingPathComponent("workflows")
         let runDirs = (try? fm.contentsOfDirectory(
@@ -30,23 +44,23 @@ public enum WorkflowRunIndex {
 
         return runDirs
             .filter { $0.lastPathComponent.hasPrefix("wf_") }
-            .sorted {
-                let a = (try? $0.resourceValues(forKeys: [.creationDateKey]))?.creationDate
-                let b = (try? $1.resourceValues(forKeys: [.creationDateKey]))?.creationDate
-                return (a ?? .distantPast) < (b ?? .distantPast)
-            }
-            .map { dir in
-                load(runDir: dir, subagentsDir: subagentsDir)
-            }
+            // Stamped once, then sorted. A comparator that stats is a stat
+            // per comparison, not per directory.
+            .map { ($0, (try? $0.resourceValues(
+                forKeys: [.creationDateKey]))?.creationDate ?? .distantPast) }
+            .sorted { $0.1 < $1.1 }
+            .map(\.0)
     }
 
-    private static func load(runDir: URL, subagentsDir: URL) -> WorkflowRun {
+    /// One run. The journal is read whole, and it is not small — a 32-agent
+    /// run leaves 235KB here, since every `result` entry carries the
+    /// agent's return value inline. Callers on a scan path are expected to
+    /// cache this against the journal's timestamp.
+    public static func load(runDir: URL, subagentsDir: URL) -> WorkflowRun {
         let runId = runDir.lastPathComponent
         let journalURL = runDir.appendingPathComponent("journal.jsonl")
         let byAgentId = SubagentIndex.load(dir: runDir).byAgentId
 
-        // The journal, wholesale: one line per lifecycle event, a few KB
-        // at most even for a long run.
         var startOrder: [String] = []
         var finished = Set<String>()
         if let data = try? Data(contentsOf: journalURL) {
@@ -76,7 +90,24 @@ public enum WorkflowRunIndex {
             dir: runDir,
             journalURL: journalURL,
             agents: agents,
-            finished: finished)
+            finished: finished,
+            isComplete: finished.count == agents.count
+                || hasStopped(runId: runId, subagentsDir: subagentsDir))
+    }
+
+    /// The launcher writes `<session>/workflows/<runId>.json` when a run
+    /// stops, carrying the `status` the journal never records. Read only
+    /// when the journal leaves an agent unaccounted for: while a run is
+    /// live the file is simply absent, and once it exists it is large
+    /// (the whole script and every return value are inlined).
+    private static func hasStopped(runId: String, subagentsDir: URL) -> Bool {
+        let url = subagentsDir.deletingLastPathComponent()
+            .appendingPathComponent("workflows/\(runId).json")
+        guard let data = try? Data(contentsOf: url),
+            let state = try? JSONValue(data: data),
+            let status = state["status"]?.stringValue
+        else { return false }
+        return status != "running"
     }
 
     /// The launcher persists each run's script as

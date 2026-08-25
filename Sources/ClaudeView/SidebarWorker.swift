@@ -29,6 +29,7 @@ actor SidebarWorker {
     private let completionScanner = AgentCompletionScanner()
 
     private var indexCache: [URL: (modifiedAt: Date, index: SubagentIndex)] = [:]
+    private var runCache: [URL: (dir: Date, journal: Date, run: WorkflowRun)] = [:]
     private var titleCache: [URL: (modifiedAt: Date, title: String?)] = [:]
     private var usageCache: [URL: (modifiedAt: Date, usage: ContextUsage?)] = [:]
 
@@ -86,20 +87,14 @@ actor SidebarWorker {
     // MARK: Cached reads
 
     private func modificationDate(of url: URL) -> Date {
-        (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-            .contentModificationDate ?? .distantPast
+        FileStamp.modified(url)
     }
 
-    /// Asked by path, not through the URL. A `URL` memoizes its resource
-    /// values, and these come out of the cached subagent index — statting
-    /// through them reports whatever was true when the cache was filled,
-    /// which freezes every agent's activity while it is still writing.
+    /// Every URL on this path comes back out of a cache, so all of these
+    /// go through `FileStamp` — see the hazard it documents.
     private func timestamps(of url: URL) -> (created: Date?, modified: Date) {
-        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-        return (
-            attributes?[.creationDate] as? Date,
-            attributes?[.modificationDate] as? Date ?? .distantPast
-        )
+        let stamp = FileStamp.of(url)
+        return (stamp.created, stamp.modified ?? .distantPast)
     }
 
     /// Reloaded only when the directory changes — every meta in it is
@@ -112,6 +107,27 @@ actor SidebarWorker {
         let index = SubagentIndex.load(dir: dir)
         indexCache[dir] = (mtime, index)
         return index
+    }
+
+    /// A run is re-read only when its directory or its journal moves. The
+    /// journal is not a small file — 235KB for a 32-agent run, every return
+    /// value inlined — and a load also re-parses every meta in the run
+    /// directory, so doing this per scan cost more than the rest of the
+    /// scan put together. Both timestamps are needed: an append moves the
+    /// journal without touching the directory around it.
+    private func workflowRuns(subagentsDir dir: URL) -> [WorkflowRun] {
+        WorkflowRunIndex.runDirectories(subagentsDir: dir).map { runDir in
+            let journal = runDir.appendingPathComponent("journal.jsonl")
+            let stamps = (modificationDate(of: runDir), modificationDate(of: journal))
+            if let cached = runCache[runDir],
+                cached.dir == stamps.0, cached.journal == stamps.1
+            {
+                return cached.run
+            }
+            let run = WorkflowRunIndex.load(runDir: runDir, subagentsDir: dir)
+            runCache[runDir] = (stamps.0, stamps.1, run)
+            return run
+        }
     }
 
     private func title(for transcript: TranscriptFile) -> String? {
@@ -146,7 +162,7 @@ actor SidebarWorker {
             projectSlug: parent.projectSlug, sessionId: parent.sessionId)
         let index = subagentIndex(dir: dir)
         // Workflow agents live a directory deeper, one subtree per run.
-        let runNodes = WorkflowRunIndex.load(subagentsDir: dir)
+        let runNodes = workflowRuns(subagentsDir: dir)
             .map { workflowNode(for: $0, parent: parent) }
         guard !index.byAgentId.isEmpty else { return runNodes }
         let byParent = Dictionary(
@@ -198,6 +214,7 @@ actor SidebarWorker {
     /// children in start order, done-ness straight from the journal — a
     /// serial run shows one spinner and a growing train of checkmarks.
     private func workflowNode(for run: WorkflowRun, parent: SessionRef) -> ActiveSubagent {
+        let journalAt = modificationDate(of: run.journalURL)
         let children = run.agents.enumerated().map { n, agent -> ActiveSubagent in
             let stamps = timestamps(of: agent.transcriptURL)
             let mtime = stamps.modified
@@ -211,7 +228,10 @@ actor SidebarWorker {
                 detail: agent.taskDescription,
                 startedAt: stamps.created,
                 lastActivity: mtime,
-                completedAt: run.finished.contains(agent.agentId) ? mtime : nil)
+                // No result in the journal is only "still working" while
+                // the run is; an agent that threw is left there forever.
+                completedAt: run.finished.contains(agent.agentId) || run.isComplete
+                    ? mtime : nil)
         }
         return ActiveSubagent(
             ref: SessionRef(
@@ -224,8 +244,8 @@ actor SidebarWorker {
             // line, and a chewed "32/45" reads as a plausible wrong count.
             detail: "\(run.finished.count)/\(run.agents.count) agents",
             startedAt: children.first?.startedAt,
-            lastActivity: modificationDate(of: run.journalURL),
-            completedAt: nil,
+            lastActivity: journalAt,
+            completedAt: run.isComplete ? journalAt : nil,
             children: children)
     }
 
