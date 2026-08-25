@@ -41,9 +41,14 @@ actor TranscriptLoader {
 
     /// Every meta in the directory is re-read and re-parsed by a load; the
     /// directory's own timestamp says when that's worth doing.
+    ///
+    /// Through `FileStamp`, never `subagentsDir.resourceValues`: that URL
+    /// is stored for the life of the loader, and a URL memoizes what it
+    /// is told — the guard below would hold forever and the index would
+    /// load exactly once, so agents spawned after the session is on
+    /// screen would never appear in it.
     private func reloadSubagentsIfChanged() {
-        let mtime = (try? subagentsDir.resourceValues(
-            forKeys: [.contentModificationDateKey]))?.contentModificationDate
+        let mtime = FileStamp.of(subagentsDir).modified
         guard mtime != indexModifiedAt else { return }
         indexModifiedAt = mtime
         assembler.subagents = SubagentIndex.load(dir: subagentsDir)
