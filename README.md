@@ -65,6 +65,28 @@ Requires macOS 15+ and a current Xcode toolchain. No dependencies.
 every transcript in your real `~/.claude` — useful after a Claude Code
 update to catch format drift early.
 
+## Driving the app from a script
+
+Some things only show up in the running app — a subagent appearing while
+its session is open, a context menu, a row that settles. `scripts/uidrive`
+captures the window and sends it real mouse events:
+
+```sh
+scripts/uidrive windows                        # id, position, size, owner
+scripts/uidrive shot /tmp/app.png --in "Claude View"
+scripts/uidrive click 115 356 --in "Claude View"
+scripts/uidrive rclick 115 356 --in "Claude View"
+scripts/uidrive scroll 400 500 -6 --in "Claude View"
+```
+
+`shot` writes the window at exactly one pixel per point, and `--in` makes
+coordinates window-relative — so a position measured on the image is a
+position you can click, with no conversion between Retina pixels and
+screen points in between. Events go through `CGEvent` because a SwiftUI
+`List` ignores AppleScript clicks and accessibility-set selection.
+
+Needs Screen Recording and Accessibility permission for whatever runs it.
+
 ## Releasing (maintainers)
 
 ```sh

@@ -1,0 +1,16 @@
+#!/bin/bash
+# Front end for scripts/uidrive.swift — compiles it once, then reuses the
+# binary until the source moves. See that file for what the tool does and
+# which permissions it needs.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+SRC="scripts/uidrive.swift"
+BIN=".build/tools/uidrive"
+
+if [ ! -x "$BIN" ] || [ "$SRC" -nt "$BIN" ]; then
+    mkdir -p "$(dirname "$BIN")"
+    swiftc -O "$SRC" -o "$BIN"
+fi
+
+exec "$BIN" "$@"
