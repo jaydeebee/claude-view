@@ -178,6 +178,64 @@ import Testing
         #expect(label == SessionRow.orphanToolResultLabel)
     }
 
+    /// The journal's lines carry no uuid, so the transcript rules call them
+    /// session state and the run's pane comes up empty. Read as a journal
+    /// they are rows with titles.
+    @Test func journalLinesBecomeRowsInsteadOfHiddenSidecars() throws {
+        let journal = [
+            #"{"type":"started","key":"v2:abc","agentId":"a7bb6ac514f3155f5"}"#,
+            #"{"type":"result","key":"v2:abc","agentId":"a7bb6ac514f3155f5","result":{"findings":[]}}"#,
+        ]
+
+        let asTranscript = SessionAssembler().assemble(entries: try entries(journal))
+        for row in asTranscript.rows {
+            guard case .bookkeeping = row else {
+                Issue.record("transcript rules should still hide these")
+                return
+            }
+        }
+
+        let asJournal = SessionAssembler(source: .workflowJournal)
+            .assemble(entries: try entries(journal))
+        #expect(asJournal.rows.count == 2)
+        guard case .info(_, let startLabel) = asJournal.rows[0],
+            case .info(_, let resultLabel) = asJournal.rows[1]
+        else {
+            Issue.record("journal lines should be info rows")
+            return
+        }
+        // No metas loaded, so the agent is named by the head of its id.
+        #expect(startLabel == "started · a7bb6ac5")
+        #expect(resultLabel == "result · a7bb6ac5")
+        #expect(asJournal.rowIds.count == asJournal.rows.count)
+        #expect(Set(asJournal.rowIds).count == asJournal.rows.count)
+    }
+
+    /// With the run's metas in hand the rows say who, not which id.
+    @Test func journalRowsUseAgentNamesWhenMetasAreLoaded() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wfrun-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data(
+            #"{"name":"verify:JSONLTailer","agentType":"claude","description":"check it"}"#.utf8
+        ).write(to: dir.appendingPathComponent("agent-a7bb6ac514f3155f5.meta.json"))
+        try Data("{}\n".utf8)
+            .write(to: dir.appendingPathComponent("agent-a7bb6ac514f3155f5.jsonl"))
+
+        let assembler = SessionAssembler(
+            subagents: SubagentIndex.load(dir: dir), source: .workflowJournal)
+        let snapshot = assembler.assemble(
+            entries: try entries([
+                #"{"type":"result","agentId":"a7bb6ac514f3155f5","result":{"ok":true}}"#
+            ]))
+        guard case .info(_, let label) = snapshot.rows.first else {
+            Issue.record("expected an info row")
+            return
+        }
+        #expect(label == "result · verify:JSONLTailer")
+    }
+
     @Test func subagentJoinsItsSpawningCall() throws {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("subagents-\(UUID().uuidString)")

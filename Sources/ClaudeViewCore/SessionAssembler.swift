@@ -205,13 +205,34 @@ public struct SessionSnapshot: Sendable {
 /// attached to their calls, sidecars folded into header state and kept
 /// as bookkeeping rows (display decides whether to show them).
 public struct SessionAssembler: Sendable {
-    public var subagents: SubagentIndex
+    /// Which JSONL file the entries came from.
+    ///
+    /// A workflow run's journal is JSONL like a transcript and shares none
+    /// of its shapes: uuid-less `started`/`result` pairs, one of each per
+    /// agent. Read under the transcript rules every line is a uuid-less
+    /// unknown — session state, hidden below Everything — so selecting a
+    /// run in the sidebar opened a pane with nothing in it. The journal is
+    /// the only record of what a run's agents actually returned, so it is
+    /// read on its own terms instead.
+    public enum Source: Sendable {
+        case transcript
+        case workflowJournal
+    }
 
-    public init(subagents: SubagentIndex = SubagentIndex()) {
+    public var subagents: SubagentIndex
+    public var source: Source
+
+    public init(
+        subagents: SubagentIndex = SubagentIndex(), source: Source = .transcript
+    ) {
         self.subagents = subagents
+        self.source = source
     }
 
     public func assemble(entries: [TranscriptEntry]) -> SessionSnapshot {
+        if source == .workflowJournal {
+            return assembleJournal(entries: entries)
+        }
         var snapshot = SessionSnapshot()
         snapshot.entryCount = entries.count
         // tool_use_id → index into snapshot.rows, for attaching results.
@@ -281,6 +302,29 @@ public struct SessionAssembler: Sendable {
         }
         snapshot.rowIds = Self.rowIdentities(for: snapshot.rows)
         return snapshot
+    }
+
+    /// The journal as rows: one per line, in file order, each expanding to
+    /// the payload it carries. A `result` line holds an agent's entire
+    /// return value, which is the thing worth opening the run for.
+    private func assembleJournal(entries: [TranscriptEntry]) -> SessionSnapshot {
+        var snapshot = SessionSnapshot()
+        snapshot.entryCount = entries.count
+        for entry in entries {
+            snapshot.rows.append(.info(entry, label: journalLabel(of: entry)))
+        }
+        snapshot.rowIds = Self.rowIdentities(for: snapshot.rows)
+        return snapshot
+    }
+
+    /// What happened, and to which agent — by name where the run's metas
+    /// have been read, by id where the journal has run ahead of them.
+    private func journalLabel(of entry: TranscriptEntry) -> String {
+        let type = entry.raw["type"]?.stringValue ?? "entry"
+        guard let agentId = entry.raw["agentId"]?.stringValue else { return type }
+        let agent = subagents.byAgentId[agentId]
+        let who = agent?.name ?? agent?.agentType ?? String(agentId.prefix(8))
+        return "\(type) · \(who)"
     }
 
     /// Numbers the rows an entry produced, so each gets its own identity.

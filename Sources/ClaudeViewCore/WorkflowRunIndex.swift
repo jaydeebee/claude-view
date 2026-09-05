@@ -28,6 +28,11 @@ public struct WorkflowRun: Sendable {
 }
 
 public enum WorkflowRunIndex {
+    /// The journal's name inside a run directory. Shared because the
+    /// transcript loader keys off it too: a file called this is read as a
+    /// run journal, not as a session.
+    public static let journalFilename = "journal.jsonl"
+
     /// All workflow runs under a session's subagents dir, oldest first.
     public static func load(subagentsDir: URL) -> [WorkflowRun] {
         runDirectories(subagentsDir: subagentsDir)
@@ -58,7 +63,7 @@ public enum WorkflowRunIndex {
     /// cache this against the journal's timestamp.
     public static func load(runDir: URL, subagentsDir: URL) -> WorkflowRun {
         let runId = runDir.lastPathComponent
-        let journalURL = runDir.appendingPathComponent("journal.jsonl")
+        let journalURL = runDir.appendingPathComponent(journalFilename)
         let byAgentId = SubagentIndex.load(dir: runDir).byAgentId
 
         var startOrder: [String] = []

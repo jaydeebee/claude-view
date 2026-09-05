@@ -15,6 +15,11 @@ actor TranscriptLoader {
     init(url: URL, subagentsDir: URL) {
         self.tailer = JSONLTailer(url: url)
         self.subagentsDir = subagentsDir
+        // The sidebar's workflow-run nodes point at a journal, which is
+        // JSONL but not a transcript.
+        if url.lastPathComponent == WorkflowRunIndex.journalFilename {
+            assembler.source = .workflowJournal
+        }
     }
 
     /// Whatever the file has that we haven't seen, folded into a fresh
