@@ -154,6 +154,14 @@ extension JSONValue {
         return out
     }
 
+    /// The same, with display limits applied while rendering — so a value
+    /// too big to show is never built in full just to be cut down.
+    public func prettyPrinted(options: JSONRenderOptions) -> String {
+        var out = ""
+        renderTokens(options: options) { out += $0.text }
+        return out
+    }
+
     public func renderTokens(
         options: JSONRenderOptions = JSONRenderOptions(),
         emit: (JSONToken) -> Void
@@ -174,11 +182,16 @@ extension JSONValue {
         case .number(let n):
             emit(.number(Self.doubleText(n)))
         case .string(let s):
-            if let limit = options.stringLimit {
-                let count = s.count
-                if count > limit {
-                    emit(.string(Self.quoted(String(s.prefix(limit)))))
-                    emit(.note(" … +\(count - limit) chars"))
+            // Counted in bytes, which a native String already knows, and
+            // measured against the head rather than the whole: `s.count`
+            // walked every character of a value that might be megabytes,
+            // on every render, to decide whether to show 500 of them.
+            if let limit = options.stringLimit, s.utf8.count > limit {
+                let head = String(s.prefix(limit))
+                let dropped = s.utf8.count - head.utf8.count
+                if dropped > 0 {
+                    emit(.string(Self.quoted(head)))
+                    emit(.note(" … +\(dropped) bytes"))
                     return
                 }
             }

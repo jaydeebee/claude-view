@@ -190,7 +190,7 @@ enum Fixtures {
         long.renderTokens(options: JSONRenderOptions(stringLimit: 10)) {
             clipped += $0.text
         }
-        #expect(clipped.contains("+20 chars"))
+        #expect(clipped.contains("+20 bytes"))
     }
 
     @Test func alignedValuesShareAColumn() throws {
