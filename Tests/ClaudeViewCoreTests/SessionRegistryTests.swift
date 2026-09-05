@@ -109,10 +109,49 @@ import Testing
         #expect(!SessionRegistry.isLive(entry(lastSeen: Date(timeIntervalSince1970: 1_600_000_000))))
         #expect(SessionRegistry.isLive(entry(lastSeen: Date())))
 
-        // The kernel knows when this process began, and it is not the epoch.
-        let began = try? #require(SessionRegistry.processStart(of: Int32(mine)))
-        #expect((began?.timeIntervalSinceNow ?? 0) <= 0)
+    }
+
+    /// `try?` here would swallow the requirement failure and leave the
+    /// next line vacuously true, so the sysctl path could break in silence
+    /// and this test would stay green.
+    @Test func theKernelSaysWhenThisProcessBegan() throws {
+        let mine = ProcessInfo.processInfo.processIdentifier
+        let began = try #require(SessionRegistry.processStart(of: mine))
+        #expect(began.timeIntervalSinceNow <= 0)
+        #expect(began.timeIntervalSinceNow > -86_400 * 365)
         #expect(SessionRegistry.processStart(of: 0) == nil)
+    }
+
+    /// An entry whose recorded process start matches the kernel's is that
+    /// process, whatever its heartbeat says — including a resumed session
+    /// with no heartbeat at all, which the heartbeat rule alone would have
+    /// called dead.
+    @Test func aMatchingProcStartSettlesItWithoutAHeartbeat() throws {
+        let mine = ProcessInfo.processInfo.processIdentifier
+        let began = try #require(SessionRegistry.processStart(of: mine))
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "EEE MMM d HH:mm:ss yyyy"
+
+        let resumed = RegistrySession(raw: .object([
+            "pid": .integer(Int64(mine)),
+            "sessionId": .string("resumed"),
+            "cwd": .string("/tmp/x"),
+            // The original session, hours before this process existed.
+            "startedAt": .number(began.addingTimeInterval(-7200).timeIntervalSince1970 * 1000),
+            "procStart": .string(formatter.string(from: began)),
+        ]))
+        #expect(SessionRegistry.isLive(resumed))
+    }
+
+    @Test func procStartParsesTheShapeTheRegistryWrites() {
+        // Single-digit days get ctime's second space.
+        let padded = RegistrySession.parseProcStart("Sat Sep  5 03:03:30 2026")
+        let plain = RegistrySession.parseProcStart("Fri Aug 29 00:54:01 2026")
+        #expect(padded != nil)
+        #expect(plain != nil)
+        #expect(RegistrySession.parseProcStart("not a date") == nil)
     }
 
     /// An entry with no timestamps at all falls back to the pid, which is

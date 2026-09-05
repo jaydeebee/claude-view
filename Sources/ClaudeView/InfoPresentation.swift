@@ -94,7 +94,12 @@ enum InfoPresentation {
     /// their head, on the row that exists to say how long you waited.
     static func durationText(milliseconds ms: Double) -> String {
         if ms < 1000 { return "\(Int(ms))ms" }
-        let total = Int(ms / 1000)
+        // Clamped, because `Int(_:)` traps on a Double too large for it and
+        // this number comes out of a file the app does not control. The
+        // caller's guard rejects non-finite and negative values, which is
+        // where the old single conversion needed help; adding a second one
+        // on this branch quietly reopened the same hole for 1e25.
+        let total = Int(min(ms / 1000, 1e9))
         if total < 60 { return String(format: "%.1fs", ms / 1000) }
         let (hours, minutes, seconds) = (total / 3600, (total % 3600) / 60, total % 60)
         if hours > 0 { return "\(hours)h \(minutes)m" }

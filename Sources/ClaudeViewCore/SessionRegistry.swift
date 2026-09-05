@@ -26,6 +26,25 @@ public struct RegistrySession: Sendable, Identifiable {
     public var startedAt: Date? { raw["startedAt"]?.doubleValue.map(Self.fromEpochMillis) }
     public var updatedAt: Date? { raw["updatedAt"]?.doubleValue.map(Self.fromEpochMillis) }
 
+    /// When Claude Code recorded its own process as having started —
+    /// `"Sat Sep  5 03:03:30 2026"`, ctime's shape, in UTC. The registry
+    /// carries this because it has the same problem the viewer does:
+    /// telling its own process from whatever inherited the pid.
+    public var processStartedAt: Date? {
+        raw["procStart"]?.stringValue.flatMap(Self.parseProcStart)
+    }
+
+    static func parseProcStart(_ text: String) -> Date? {
+        // ctime pads a single-digit day with a second space.
+        let normalized = text.split(separator: " ", omittingEmptySubsequences: true)
+            .joined(separator: " ")
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "EEE MMM d HH:mm:ss yyyy"
+        return formatter.date(from: normalized)
+    }
+
     private static func fromEpochMillis(_ ms: Double) -> Date {
         Date(timeIntervalSince1970: ms / 1000)
     }
@@ -79,16 +98,29 @@ public struct SessionRegistry: Sendable {
     /// wrote the entry last touched it. The process that wrote the entry
     /// started before. That is the whole test.
     ///
-    /// It holds for resumed sessions too, where `startedAt` may predate
-    /// the current process: the comparison is against the last heartbeat,
-    /// which a running process necessarily wrote after starting. Where the
-    /// kernel will not say when a process began, or the entry carries no
-    /// timestamps, the pid alone decides — as it always did.
+    /// The entry's own `procStart` settles it outright when both sides
+    /// can be read: a recorded start time that matches the kernel's is the
+    /// same process, with no heuristic and no slack. A mismatch is *not*
+    /// taken as proof of death — this parses a formatted date written by
+    /// another program, and a format or timezone surprise there should
+    /// cost a heuristic, not every live row in the sidebar.
+    ///
+    /// Failing that, the heartbeat: a running process necessarily wrote
+    /// its last one after starting, which holds for resumed sessions too,
+    /// where `startedAt` can predate the process serving them. An entry
+    /// with no heartbeat at all is judged on the pid alone, as it always
+    /// was — comparing against `startedAt` would answer "dead" for exactly
+    /// the resumed session this paragraph exists to protect.
     public static func isLive(_ session: RegistrySession) -> Bool {
         guard let pid = session.pid, isProcessAlive(pid) else { return false }
-        guard let began = processStart(of: pid),
-            let lastSeen = session.updatedAt ?? session.startedAt
-        else { return true }
+        let began = processStart(of: pid)
+
+        if let began, let recorded = session.processStartedAt,
+            abs(recorded.timeIntervalSince(began)) <= Self.clockSlack
+        {
+            return true
+        }
+        guard let began, let lastSeen = session.updatedAt else { return true }
         return began <= lastSeen.addingTimeInterval(Self.clockSlack)
     }
 

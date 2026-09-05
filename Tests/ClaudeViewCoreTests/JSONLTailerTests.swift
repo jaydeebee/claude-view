@@ -122,4 +122,34 @@ import Testing
         #expect(linesAfterReset == ["{\"z\":9}"])
         #expect(tailer.didResetOnLastPoll)
     }
+
+    /// A callback that throws — which is how a cancelled loader stops a
+    /// 30MB read — must cost nothing but the lines it already took. The
+    /// first version of this advanced the offset over the whole chunk and
+    /// kept the delivered line in the partial buffer, so the rest of the
+    /// chunk was lost and the next poll produced a welded line that parsed
+    /// as nothing.
+    @Test func aThrowingCallbackLosesNothing() throws {
+        let url = try makeTempFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let tailer = JSONLTailer(url: url)
+        struct Stop: Error {}
+
+        try append("{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n", to: url)
+        var delivered: [String] = []
+        #expect(throws: Stop.self) {
+            try tailer.poll { line in
+                delivered.append(String(decoding: line, as: UTF8.self))
+                throw Stop()
+            }
+        }
+        #expect(delivered == ["{\"a\":1}"])
+
+        // Everything the callback never saw is still there, intact and
+        // separate, and so is anything appended since.
+        try append("{\"d\":4}\n", to: url)
+        var rest: [String] = []
+        try tailer.poll { rest.append(String(decoding: $0, as: UTF8.self)) }
+        #expect(rest == ["{\"b\":2}", "{\"c\":3}", "{\"d\":4}"])
+    }
 }

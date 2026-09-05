@@ -67,17 +67,30 @@ public final class JSONLTailer {
             guard let chunk = try? handle.read(upToCount: Self.chunkSize),
                 !chunk.isEmpty
             else { break }
-            offset += UInt64(chunk.count)
             var start = chunk.startIndex
             while let nl = chunk[start...].firstIndex(of: UInt8(ascii: "\n")) {
                 partial.append(chunk[start..<nl])
-                if !partial.isEmpty {
-                    try onLine(partial)
-                }
+                // Taken and cleared *before* delivery. Held across the
+                // call, a throwing callback left the line still sitting in
+                // `partial`, to be welded onto whatever the next poll read.
+                let line = partial
                 partial = Data()
                 start = chunk.index(after: nl)
+                guard !line.isEmpty else { continue }
+                do {
+                    try onLine(line)
+                } catch {
+                    // Advance over exactly what was delivered — the bytes
+                    // of this chunk up to and including this line's
+                    // newline — so the next poll resumes on the first line
+                    // the caller never saw. Advancing over the whole chunk
+                    // here silently swallowed the rest of it.
+                    offset += UInt64(chunk.distance(from: chunk.startIndex, to: start))
+                    throw error
+                }
             }
             partial.append(chunk[start...])
+            offset += UInt64(chunk.count)
         }
     }
 
