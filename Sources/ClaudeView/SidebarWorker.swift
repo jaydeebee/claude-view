@@ -73,7 +73,9 @@ actor SidebarWorker {
             let tree = agentTree(for: ref)
             state.agentTrees[sessionId] = tree
             record(tree, into: &state)
-            state.usage[url] = summary(for: url, modifiedAt: modificationDate(of: url)).usage
+            let summary = summary(for: url, modifiedAt: modificationDate(of: url))
+            state.titles[url] = summary.title
+            state.usage[url] = summary.usage
             scanned.insert(url)
             collectURLs(tree, into: &scanned)
         }

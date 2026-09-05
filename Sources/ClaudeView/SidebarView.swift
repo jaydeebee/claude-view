@@ -16,6 +16,7 @@ struct SidebarView: View {
                     ForEach(model.liveRefs, id: \.ref) { live in
                         LiveSessionRow(
                             session: live.session,
+                            title: model.title(for: live.ref.url),
                             usage: model.contextUsage(for: live.ref.url)
                         )
                         .tag(live.ref)
@@ -36,7 +37,7 @@ struct SidebarView: View {
                     ForEach(project.transcripts) { transcript in
                         HistorySessionRow(
                             transcript: transcript,
-                            title: model.title(for: transcript),
+                            title: model.title(for: transcript.url),
                             usage: model.contextUsage(for: transcript.url)
                         )
                         .tag(
@@ -79,6 +80,13 @@ struct SidebarView: View {
 
 struct LiveSessionRow: View {
     let session: RegistrySession
+    /// What the session is about, from its own transcript — the same
+    /// ai-title the history rows show. The registry's derived name
+    /// ("claude-view-8d") says where it is running and which session it
+    /// is, which the row already says twice: once in the path below and
+    /// once by being selectable. It stays as the fallback for a session
+    /// too young to have earned a title, and in the tooltip.
+    let title: String?
     /// Context size of the last turn. Live is no guarantee of warm — a
     /// TUI left idle past the TTL reprocesses everything on the next
     /// message — so the count wears the same warmth color as history.
@@ -94,8 +102,11 @@ struct LiveSessionRow: View {
                 .frame(width: 8, height: 8)
                 .accessibilityLabel(session.status ?? "idle")
             VStack(alignment: .leading, spacing: 2) {
-                Text(session.name ?? session.sessionId?.prefix(8).description ?? "session")
-                    .lineLimit(1)
+                Text(
+                    title ?? session.name
+                        ?? session.sessionId?.prefix(8).description ?? "session"
+                )
+                .lineLimit(1)
                 if let cwd = session.cwd {
                     cwdLine(cwd)
                         .font(.caption)
@@ -115,7 +126,16 @@ struct LiveSessionRow: View {
             }
         }
         .padding(.vertical, 2)
-        .help(usage.map { warmthHint($0, verb: "next turn") } ?? "")
+        .help(helpText)
+    }
+
+    /// The derived name still has a job — it is what the session calls
+    /// itself in a terminal — so it lives here once the title takes the
+    /// row.
+    private var helpText: String {
+        let warmth = usage.map { warmthHint($0, verb: "next turn") }
+        let name = title == nil ? nil : session.name
+        return [name, warmth].compactMap { $0 }.joined(separator: "\n")
     }
 
     private func cwdLine(_ cwd: String) -> Text {

@@ -138,10 +138,9 @@ final class AppModel {
         return slug
     }
 
-    /// Sidebar title for a transcript, as of the last scan.
-    func title(for transcript: TranscriptFile) -> String? {
-        state.titles[transcript.url]
-    }
+    /// Sidebar title for a transcript, as of the last scan. Live sessions
+    /// and history rows both have one; it comes out of the file either way.
+    func title(for url: URL) -> String? { state.titles[url] }
 
     /// Context size for a sidebar row, as of the last scan.
     func contextUsage(for url: URL) -> ContextUsage? { state.usage[url] }
