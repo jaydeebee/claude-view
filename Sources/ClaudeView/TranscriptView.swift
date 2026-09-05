@@ -61,9 +61,10 @@ private struct TranscriptLoadedView: View {
     /// a sliding scale serves both, plus the stop in between.
     @AppStorage("transcriptDetail") private var detail: DetailLevel = .conversation
     @State private var inspectedEntry: TranscriptEntry?
-    /// Rows not in this set arrived after the view opened — they fade in.
-    /// Identity-based: filtered rows shift indices, ids never lie.
-    @State private var initialRowIds: Set<String>?
+    /// Rows in this set do not fade: everything present when the view
+    /// opened, plus every row that has since faded in once. Identity-based
+    /// — filtered rows shift indices, ids never lie.
+    @State private var settledRowIds: Set<String>?
     /// The pending second scroll, cancelled by any scroll that follows it
     /// so a burst of appends settles once, at the end.
     @State private var settleTask: Task<Void, Never>?
@@ -102,11 +103,11 @@ private struct TranscriptLoadedView: View {
                 if follow { scrollToEnd(proxy: proxy) }
             }
             .onAppear {
-                if initialRowIds == nil {
+                if settledRowIds == nil {
                     // Seed from ALL rows, not just the displayed ones —
                     // flipping the internals switch reveals old rows, and
                     // old rows don't fade in like fresh arrivals.
-                    initialRowIds = Set(model.snapshot.rowIds)
+                    settledRowIds = Set(model.snapshot.rowIds)
                 }
                 scrollToEnd(proxy: proxy, animated: false)
             }
@@ -151,7 +152,9 @@ private struct TranscriptLoadedView: View {
         let groups = turnGroups
         ForEach(groups) { turn in
             if let promptText = turn.promptText {
-                NewRowFade(isNew: isNewRowId(turn.id)) {
+                NewRowFade(
+                    isNew: isNewRowId(turn.id), onReveal: { markSettled(turn.id) }
+                ) {
                     TurnHeaderView(
                         text: promptText,
                         isExpanded: isTurnExpanded(turn, total: groups.count),
@@ -177,7 +180,9 @@ private struct TranscriptLoadedView: View {
 
     @ViewBuilder private func turnRows(_ rows: [DisplayRow]) -> some View {
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
-            NewRowFade(isNew: isNewRowId(item.id)) {
+            NewRowFade(
+                isNew: isNewRowId(item.id), onReveal: { markSettled(item.id) }
+            ) {
                 TranscriptRowView(
                     row: item.row,
                     isExpanded: expansionBinding(for: item),
@@ -223,8 +228,17 @@ private struct TranscriptLoadedView: View {
     }
 
     private func isNewRowId(_ id: String) -> Bool {
-        guard let initialRowIds else { return false }
-        return !initialRowIds.contains(id)
+        guard let settledRowIds else { return false }
+        return !settledRowIds.contains(id)
+    }
+
+    /// A row fades in the first time it is seen and never again. The flag
+    /// that used to say so lived in the row's own @State, which a
+    /// LazyVStack throws away the moment the row scrolls out of sight — so
+    /// scrolling back up replayed the arrival animation on rows that had
+    /// arrived minutes ago. Remembered here, where the list is.
+    private func markSettled(_ id: String) {
+        settledRowIds?.insert(id)
     }
 
     private func rowFamily(_ row: SessionRow) -> String {
@@ -395,11 +409,14 @@ private struct TranscriptLoadedView: View {
 }
 
 /// Newly appended rows fade in; everything older renders at full opacity
-/// immediately, including when merely scrolled back into view. Marks
-/// itself revealed on every appearance so no flag flip can strand a row
-/// invisible.
+/// immediately, including when merely scrolled back into view.
+///
+/// `onReveal` is how that outlasts the row: this view's own state goes
+/// away with the row when a LazyVStack recycles it, and a fade that
+/// remembers nothing replays every time the row scrolls back on screen.
 struct NewRowFade<Content: View>: View {
     let isNew: Bool
+    var onReveal: () -> Void = {}
     @ViewBuilder let content: Content
 
     @State private var revealed = false
@@ -408,13 +425,14 @@ struct NewRowFade<Content: View>: View {
         content
             .opacity(isNew && !revealed ? 0 : 1)
             .onAppear {
-                if isNew && !revealed {
-                    withAnimation(.easeOut(duration: 0.3)) {
-                        revealed = true
-                    }
-                } else {
+                guard isNew, !revealed else {
+                    revealed = true
+                    return
+                }
+                withAnimation(.easeOut(duration: 0.3)) {
                     revealed = true
                 }
+                onReveal()
             }
     }
 }

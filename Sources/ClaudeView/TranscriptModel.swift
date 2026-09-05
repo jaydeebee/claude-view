@@ -31,6 +31,11 @@ actor TranscriptLoader {
         // would otherwise hold the raw lines and the entries parsed from
         // them at the same time, for the whole of the parse.
         try? tailer.poll(onReset: { entries.removeAll() }) { line in
+            // Selecting another session cancels the task that drives this.
+            // Without the check, the abandoned session parses to the end
+            // anyway — seconds of work for a pane that is already gone,
+            // competing with the load the user is waiting for.
+            try Task.checkCancellation()
             appended += 1
             // A malformed line (harness crash mid-write) shouldn't take the
             // session down with it.
@@ -38,6 +43,7 @@ actor TranscriptLoader {
                 entries.append(entry)
             }
         }
+        guard !Task.isCancelled else { return nil }
         guard appended > 0 || tailer.didResetOnLastPoll else { return nil }
         reloadSubagentsIfChanged()
         return assembler.assemble(entries: entries)

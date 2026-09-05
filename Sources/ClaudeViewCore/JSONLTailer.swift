@@ -42,7 +42,10 @@ public final class JSONLTailer {
     /// byte this one did not read. Throwing instead — which is what this
     /// did — stranded every line of a successful chunk behind an offset
     /// that had already moved past them.
-    public func poll(onReset: () -> Void = {}, onLine: (Data) -> Void) throws {
+    /// `onLine` may throw to end the poll early — a caller that has been
+    /// cancelled should not be made to finish reading a 30MB file first.
+    /// What it already consumed stays consumed, as with a failed read.
+    public func poll(onReset: () -> Void = {}, onLine: (Data) throws -> Void) throws {
         didResetOnLastPoll = false
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             // Vanished or unreadable; keep state, the file may reappear.
@@ -69,7 +72,7 @@ public final class JSONLTailer {
             while let nl = chunk[start...].firstIndex(of: UInt8(ascii: "\n")) {
                 partial.append(chunk[start..<nl])
                 if !partial.isEmpty {
-                    onLine(partial)
+                    try onLine(partial)
                 }
                 partial = Data()
                 start = chunk.index(after: nl)
