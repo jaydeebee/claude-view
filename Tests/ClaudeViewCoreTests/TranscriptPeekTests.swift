@@ -150,4 +150,29 @@ import Testing
         #expect(usage.contextTokens == 703)
         #expect(usage.cacheTTL == 300)  // no breakdown → short clock
     }
+
+    /// A turn cannot have happened later than now. Taken at face value, a
+    /// clock that disagrees made a row warm until its future arrived.
+    @Test func warmthIgnoresATurnDatedInTheFuture() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let recent = ContextUsage(
+            contextTokens: 1000, at: now.addingTimeInterval(-60), cacheTTL: 300)
+        #expect(recent.isWarm(now: now))
+
+        let stale = ContextUsage(
+            contextTokens: 1000, at: now.addingTimeInterval(-600), cacheTTL: 300)
+        #expect(!stale.isWarm(now: now))
+
+        // An hour into the future: warmUntil is later still, so the naive
+        // comparison says warm.
+        let skewed = ContextUsage(
+            contextTokens: 1000, at: now.addingTimeInterval(3600), cacheTTL: 300)
+        #expect(skewed.warmUntil > now)
+        #expect(!skewed.isWarm(now: now))
+
+        // Ordinary skew — a few seconds — is still warm.
+        let nudged = ContextUsage(
+            contextTokens: 1000, at: now.addingTimeInterval(10), cacheTTL: 300)
+        #expect(nudged.isWarm(now: now))
+    }
 }

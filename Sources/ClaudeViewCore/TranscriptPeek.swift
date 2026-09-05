@@ -21,6 +21,20 @@ public struct ContextUsage: Sendable, Equatable {
     /// heuristic, not a promise: a harness upgrade between sessions
     /// breaks the cached prefix early.
     public var warmUntil: Date { at.addingTimeInterval(cacheTTL) }
+
+    /// Whether that presumption holds as of `now`.
+    ///
+    /// A turn cannot have happened later than now, so a turn dated in the
+    /// future is a clock disagreeing — a transcript written on another
+    /// machine, a system clock nudged, a timezone confusion in the
+    /// harness. Taken at face value it made a row warm until that future
+    /// arrived, which for a badly wrong clock is forever: the sidebar
+    /// would show a session as cached that had gone cold days ago. A
+    /// minute of slack absorbs ordinary skew; past that, no claim.
+    public func isWarm(now: Date = Date()) -> Bool {
+        guard at <= now.addingTimeInterval(60) else { return false }
+        return warmUntil > now
+    }
 }
 
 /// Cheap glances at a transcript without reading the whole file — sidebar

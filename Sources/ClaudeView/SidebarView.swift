@@ -5,10 +5,27 @@ import SwiftUI
 struct SidebarView: View {
     @Bindable var model: AppModel
 
+    /// The clock, as far as this view is concerned.
+    ///
+    /// Warmth colour and "3 minutes ago" are read off the current time,
+    /// and nothing else about a quiet session changes — so a sidebar left
+    /// alone kept drawing a cache as warm long after it expired, which is
+    /// exactly when you come back and look at it. Once a minute is fine
+    /// for both: the colour is a hint, not a countdown.
+    @State private var now = Date()
+
     var body: some View {
         List(selection: $model.selection) {
             Section("Live") {
-                if model.liveRefs.isEmpty {
+                if !model.hasScanned {
+                    // Before the first scan lands there is nothing to
+                    // report — saying "none" here asserts a fact not yet
+                    // in evidence, and on a machine with sessions running
+                    // it is briefly a lie.
+                    Text("Looking for sessions…")
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                } else if model.liveRefs.isEmpty {
                     Text("No running sessions")
                         .foregroundStyle(.secondary)
                         .font(.callout)
@@ -17,7 +34,8 @@ struct SidebarView: View {
                         LiveSessionRow(
                             session: live.session,
                             title: model.title(for: live.ref.url),
-                            usage: model.contextUsage(for: live.ref.url)
+                            usage: model.contextUsage(for: live.ref.url),
+                            now: now
                         )
                         .tag(live.ref)
                         .contextMenu {
@@ -38,7 +56,8 @@ struct SidebarView: View {
                         HistorySessionRow(
                             transcript: transcript,
                             title: model.title(for: transcript.url),
-                            usage: model.contextUsage(for: transcript.url)
+                            usage: model.contextUsage(for: transcript.url),
+                            now: now
                         )
                         .tag(
                             SessionRef(
@@ -58,6 +77,13 @@ struct SidebarView: View {
             }
         }
         .navigationSplitViewColumnWidth(min: 240, ideal: 300)
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(60))
+                guard !Task.isCancelled else { return }
+                now = Date()
+            }
+        }
         .toolbar {
             ToolbarItem {
                 Button {
@@ -91,6 +117,9 @@ struct LiveSessionRow: View {
     /// TUI left idle past the TTL reprocesses everything on the next
     /// message — so the count wears the same warmth color as history.
     let usage: ContextUsage?
+    /// Passed in rather than read here, so the row redraws when the
+    /// sidebar's clock ticks.
+    let now: Date
 
     private var isBusy: Bool { session.status == "busy" }
     private var isIdle: Bool { session.status == "idle" || session.status == nil }
@@ -120,9 +149,16 @@ struct LiveSessionRow: View {
                 ProgressView()
                     .controlSize(.small)
             } else if !isIdle, let status = session.status {
+                // Whatever the registry says, in whatever length: a status
+                // this build has never met is still just a word in a
+                // narrow column, and unclamped it pushes the row wider
+                // than the sidebar.
                 Text(status)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 72, alignment: .trailing)
             }
         }
         .padding(.vertical, 2)
@@ -133,7 +169,7 @@ struct LiveSessionRow: View {
     /// itself in a terminal — so it lives here once the title takes the
     /// row.
     private var helpText: String {
-        let warmth = usage.map { warmthHint($0, verb: "next turn") }
+        let warmth = usage.map { warmthHint($0, verb: "next turn", now: now) }
         let name = title == nil ? nil : session.name
         return [name, warmth].compactMap { $0 }.joined(separator: "\n")
     }
@@ -141,7 +177,8 @@ struct LiveSessionRow: View {
     private func cwdLine(_ cwd: String) -> Text {
         let base = Text((cwd as NSString).abbreviatingWithTildeInPath)
         guard let usage else { return base }
-        return base + warmTokenText(" · " + tokenLabel(usage.contextTokens), usage: usage)
+        return base
+            + warmTokenText(" · " + tokenLabel(usage.contextTokens), usage: usage, now: now)
     }
 }
 
@@ -190,6 +227,7 @@ struct HistorySessionRow: View {
     let transcript: TranscriptFile
     let title: String?
     let usage: ContextUsage?
+    let now: Date
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -200,7 +238,7 @@ struct HistorySessionRow: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
-        .help(usage.map { warmthHint($0, verb: "resume") } ?? "")
+        .help(usage.map { warmthHint($0, verb: "resume", now: now) } ?? "")
     }
 
     /// "2 weeks ago · 2.2 MB · 181k tok" — the token run turns orange
@@ -211,7 +249,8 @@ struct HistorySessionRow: View {
                 + " · " + transcript.size.formatted(.byteCount(style: .file)))
         guard let usage else { return base }
         return base
-            + warmTokenText(" · " + tokenLabel(usage.contextTokens) + " tok", usage: usage)
+            + warmTokenText(
+                " · " + tokenLabel(usage.contextTokens) + " tok", usage: usage, now: now)
     }
 }
 
@@ -219,26 +258,29 @@ struct HistorySessionRow: View {
 private func tokenLabel(_ count: Int64) -> String {
     switch count {
     case ..<1_000: "\(count)"
-    case ..<1_000_000: "\((count + 500) / 1_000)k"
+    // The k form rounds, so the boundary belongs where the rounding lands,
+    // not where the number does: 999,500 reads as "1000k" otherwise, which
+    // is both wider than the column and a unit nobody uses.
+    case ..<999_500: "\((count + 500) / 1_000)k"
     default: String(format: "%.1fM", Double(count) / 1_000_000)
     }
 }
 
 /// A token-count run that turns orange while the cache is presumed
 /// warm; time-based, so each heartbeat re-render lets it cool off.
-private func warmTokenText(_ label: String, usage: ContextUsage) -> Text {
-    guard usage.warmUntil > Date() else { return Text(label) }
+private func warmTokenText(_ label: String, usage: ContextUsage, now: Date) -> Text {
+    guard usage.isWarm(now: now) else { return Text(label) }
     return Text(label).foregroundStyle(.orange)
 }
 
 /// Row tooltip; `verb` names the act the cost applies to — "resume"
 /// for history rows, "next turn" for live ones.
-private func warmthHint(_ usage: ContextUsage, verb: String) -> String {
+private func warmthHint(_ usage: ContextUsage, verb: String, now: Date) -> String {
     let tokens = tokenLabel(usage.contextTokens)
-    guard usage.warmUntil > Date() else {
+    guard usage.isWarm(now: now) else {
         return "Cache cold — \(verb) reprocesses ~\(tokens) tokens uncached"
     }
-    let minutes = max(1, Int(usage.warmUntil.timeIntervalSinceNow / 60))
+    let minutes = max(1, Int(usage.warmUntil.timeIntervalSince(now) / 60))
     return "Cache warm — \(verb) reuses ~\(tokens) tokens (expires in ~\(minutes)m)"
 }
 

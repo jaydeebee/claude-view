@@ -27,6 +27,9 @@ final class AppModel {
     /// The last completed scan. Everything the sidebar draws comes from
     /// here, so its body stays a pure read.
     private(set) var state = SidebarState()
+    /// False until the first scan lands. The sidebar has nothing to say
+    /// about live sessions before that, and saying "none" is not nothing.
+    private(set) var hasScanned = false
     var selection: SessionRef?
     /// Sidebar filter: hide finished and long-inactive agents when true.
     var agentFilterRunningOnly = false
@@ -93,6 +96,7 @@ final class AppModel {
             let scanned = await worker.scan()
             guard !Task.isCancelled else { return }
             self.state = scanned
+            self.hasScanned = true
             self.scanning = nil
             if self.rescanWanted {
                 self.rescanWanted = false
@@ -128,14 +132,20 @@ final class AppModel {
     /// Where a project's sessions ran, when a transcript could say.
     func path(forSlug slug: String) -> String? { state.projectPaths[slug] }
 
-    /// "-Users-x-src-app" reads poorly; show it relative to $HOME when possible.
+    /// "-Users-x-src-app" reads poorly; show it relative to $HOME when
+    /// possible.
+    ///
+    /// The prefix has to end on a separator. Without that, "-Users-jdb"
+    /// matched "-Users-jdbackup-notes" and served it back as
+    /// "ckup-notes" — a sibling directory renamed into nonsense by a
+    /// string operation that never checked it was cutting at a boundary.
     nonisolated static func displayName(forSlug slug: String) -> String {
-        let homeSlug = ClaudePaths.projectSlug(
-            for: FileManager.default.homeDirectoryForCurrentUser.path)
-        if slug.hasPrefix(homeSlug), slug.count > homeSlug.count + 1 {
-            return String(slug.dropFirst(homeSlug.count + 1))
+        let homePrefix = ClaudePaths.projectSlug(
+            for: FileManager.default.homeDirectoryForCurrentUser.path) + "-"
+        guard slug.hasPrefix(homePrefix), slug.count > homePrefix.count else {
+            return slug
         }
-        return slug
+        return String(slug.dropFirst(homePrefix.count))
     }
 
     /// Sidebar title for a transcript, as of the last scan. Live sessions
