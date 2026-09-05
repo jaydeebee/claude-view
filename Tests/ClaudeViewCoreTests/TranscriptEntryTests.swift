@@ -205,4 +205,19 @@ enum Fixtures {
         }
         #expect(Set(valueColumns).count == 1, "values should start at one column: \(text)")
     }
+
+    /// Copy JSON has to produce JSON. Swift spells these "inf", "-inf" and
+    /// "nan"; a parser handed any of them stops.
+    @Test func infinitiesAreWrittenAsNull() {
+        #expect(JSONValue.number(.infinity).prettyPrinted == "null")
+        #expect(JSONValue.number(-.infinity).prettyPrinted == "null")
+        #expect(JSONValue.number(.nan).prettyPrinted == "null")
+        // Ordinary numbers are untouched.
+        #expect(JSONValue.number(1.5).prettyPrinted == "1.5")
+        #expect(JSONValue.number(3).prettyPrinted == "3")
+        let object = JSONValue.object(["a": .number(-.infinity), "b": .integer(2)])
+        #expect(
+            (try? JSONSerialization.jsonObject(
+                with: Data(object.prettyPrinted.utf8))) != nil)
+    }
 }

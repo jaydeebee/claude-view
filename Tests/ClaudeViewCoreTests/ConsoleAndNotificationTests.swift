@@ -16,6 +16,16 @@ import Testing
         #expect(ANSIText.stripped("\u{1B}]0;title\u{07}text") == "text")
         #expect(ANSIText.stripped("\u{1B}]8;;url\u{1B}\\link") == "link")
         #expect(ANSIText.stripped("\u{1B}creset") == "reset")
+        // ESC ( B is the first half of terminfo's sgr0 on this machine, so
+        // any `!` command that resets its attributes ends with one of
+        // these. Dropping a single scalar left the "B" in the row.
+        #expect(ANSIText.stripped("\u{1B}(B\u{1B}[mdone") == "done")
+        #expect(ANSIText.stripped("\u{1B})0\u{1B}#8x") == "x")
+        // DCS/SOS/PM/APC run to a string terminator, not two characters.
+        #expect(ANSIText.stripped("\u{1B}P1;2|payload\u{1B}\\after") == "after")
+        #expect(ANSIText.stripped("\u{1B}_status\u{07}after") == "after")
+        // A truncated escape at the end consumes what is there and stops.
+        #expect(ANSIText.stripped("text\u{1B}(") == "text")
         #expect(ANSIText.stripped("no escapes here") == "no escapes here")
         #expect(ANSIText.stripped("trailing\u{1B}") == "trailing")
     }

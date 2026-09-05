@@ -20,6 +20,12 @@ enum ToolPresentation {
 
     /// One-line gist of the input: the command, the file, the pattern —
     /// whichever field carries the intent for this tool.
+    /// Keys whose values are paths. Everything else is left alone:
+    /// abbreviatePath rewrites any leading "/Users/<me>" into "~", which
+    /// for a Grep pattern or a Bash description is silent corruption of
+    /// the thing the row is quoting.
+    private static let pathKeys: Set<String> = ["file_path", "path", "notebook_path"]
+
     static func summary(name: String, input: JSONValue) -> String {
         let candidates: [String]
         switch name {
@@ -34,7 +40,8 @@ enum ToolPresentation {
         }
         for key in candidates {
             if let value = input[key]?.stringValue, !value.isEmpty {
-                return firstLine(of: abbreviatePath(head(of: value)))
+                let text = head(of: value)
+                return firstLine(of: pathKeys.contains(key) ? abbreviatePath(text) : text)
             }
         }
         // Fall back to the first short string field the input has.

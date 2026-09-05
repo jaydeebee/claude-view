@@ -81,12 +81,24 @@ enum InfoPresentation {
             guard let ms = entry.raw["durationMs"]?.doubleValue,
                 ms.isFinite, ms >= 0
             else { return nil }
-            return ms < 1000 ? "\(Int(ms))ms" : String(format: "%.1fs", ms / 1000)
+            return durationText(milliseconds: ms)
         case "local_command":
             return commandOutput(of: entry).map(firstLine)
         default:
             return entry.raw["content"]?.stringValue.map(firstLine)
         }
+    }
+
+    /// "840ms", "4.5s", "1m 15s", "2h 6m". A turn that takes three
+    /// quarters of an hour read as "2661.7s" — a number nobody converts in
+    /// their head, on the row that exists to say how long you waited.
+    static func durationText(milliseconds ms: Double) -> String {
+        if ms < 1000 { return "\(Int(ms))ms" }
+        let total = Int(ms / 1000)
+        if total < 60 { return String(format: "%.1fs", ms / 1000) }
+        let (hours, minutes, seconds) = (total / 3600, (total % 3600) / 60, total % 60)
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        return "\(minutes)m \(seconds)s"
     }
 
     /// Inner text of the stdout/stderr envelope on local_command entries.

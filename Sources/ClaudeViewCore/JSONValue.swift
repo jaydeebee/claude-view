@@ -245,6 +245,11 @@ extension JSONValue {
     }
 
     private static func doubleText(_ n: Double) -> String {
+        // JSON has no infinities and no NaN, and Swift spells them "inf",
+        // "-inf" and "nan" — none of which parse. A number the app cannot
+        // represent is written as the absence of one, so Copy JSON always
+        // yields something a parser will take.
+        guard n.isFinite else { return "null" }
         // Negative zero keeps its sign; whole doubles print without ".0".
         if n == n.rounded(), abs(n) < 1e15, !(n == 0 && n.sign == .minus) {
             return String(Int64(n))
