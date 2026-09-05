@@ -113,6 +113,14 @@ public enum MarkdownBlocks {
                 inFence.toggle()
             } else if inFence {
                 result.append(line)
+            } else if line.hasPrefix("    ") || line.hasPrefix("\t") {
+                // An indented code block is code without a fence to say
+                // so, and its newlines and leading spaces are the content:
+                // rewriting `let a = [foo` / `bar](baz)` into one line
+                // destroys both, and can cost the block its indent and so
+                // its code-ness entirely.
+                flushProse()
+                result.append(line)
             } else {
                 prose.append(line)
             }
@@ -162,6 +170,7 @@ public enum MarkdownBlocks {
         private var markedListItems: Set<Int> = []
 
         private var openTableIdentity: Int?
+        private var openTableQuoted = false
         private var tableColumnCount = 0
         private var tableHeaderCells: [Int: AttributedString] = [:]
         private var tableRowCells: [Int: [Int: AttributedString]] = [:]
@@ -174,6 +183,7 @@ public enum MarkdownBlocks {
                     flushBlock()
                     flushTable()
                     openTableIdentity = table.identity
+                    openTableQuoted = Self.isQuoted(components)
                     if case .table(let columns) = table.kind {
                         tableColumnCount = columns.count
                     }
@@ -197,15 +207,24 @@ public enum MarkdownBlocks {
             flushTable()
         }
 
-        /// Set for the duration of one flush, so every `append` in it
-        /// carries the quoting of the block being flushed.
-        private var flushingQuoted = false
-
-        private mutating func append(_ kind: MarkdownBlock.Kind, _ content: AttributedString) {
+        /// Quoting is passed in rather than read from a field set for the
+        /// duration of a flush. It was a field, and tables — which never
+        /// go through a flush, having their own path from `add` — came out
+        /// unquoted: the field had already been reset by the time the
+        /// table was emitted. An argument makes forgetting it a compile
+        /// error rather than a missing bar.
+        private mutating func append(
+            _ kind: MarkdownBlock.Kind, _ content: AttributedString, quoted: Bool
+        ) {
             blocks.append(
-                MarkdownBlock(
-                    id: nextId, kind: kind, content: content, isQuoted: flushingQuoted))
+                MarkdownBlock(id: nextId, kind: kind, content: content, isQuoted: quoted))
             nextId += 1
+        }
+
+        private static func isQuoted(_ components: [PresentationIntent.IntentType]) -> Bool {
+            components.contains {
+                if case .blockQuote = $0.kind { return true } else { return false }
+            }
         }
 
         private mutating func flushBlock() {
@@ -216,15 +235,12 @@ public enum MarkdownBlocks {
             }
             guard currentChain != nil else { return }
             let components = currentComponents
-            flushingQuoted = components.contains {
-                if case .blockQuote = $0.kind { return true } else { return false }
-            }
-            defer { flushingQuoted = false }
+            let quoted = Self.isQuoted(components)
 
             if components.contains(where: {
                 if case .thematicBreak = $0.kind { return true } else { return false }
             }) {
-                append(.divider, AttributedString())
+                append(.divider, AttributedString(), quoted: quoted)
                 return
             }
 
@@ -234,14 +250,14 @@ public enum MarkdownBlocks {
                 var text = String(currentContent.characters)
                 if text.hasSuffix("\n") { text.removeLast() }
                 let language = hint.flatMap { $0.isEmpty ? nil : $0 }
-                append(.code(language: language), AttributedString(text))
+                append(.code(language: language), AttributedString(text), quoted: quoted)
                 return
             }
 
             if let header = components.first(where: {
                 if case .header = $0.kind { return true } else { return false }
             }), case .header(let level) = header.kind {
-                append(.heading(level), currentContent)
+                append(.heading(level), currentContent, quoted: quoted)
                 return
             }
 
@@ -270,17 +286,17 @@ public enum MarkdownBlocks {
                 }
                 append(
                     .listItem(marker: marker, indent: max(containers.count, 1)),
-                    currentContent)
+                    currentContent, quoted: quoted)
                 return
             }
 
-            if flushingQuoted {
-                append(.blockquote, currentContent)
+            if quoted {
+                append(.blockquote, currentContent, quoted: true)
                 return
             }
 
             if !currentContent.characters.isEmpty {
-                append(.paragraph, currentContent)
+                append(.paragraph, currentContent, quoted: false)
             }
         }
 
@@ -311,6 +327,7 @@ public enum MarkdownBlocks {
             guard openTableIdentity != nil else { return }
             defer {
                 openTableIdentity = nil
+                openTableQuoted = false
                 tableColumnCount = 0
                 tableHeaderCells = [:]
                 tableRowCells = [:]
@@ -327,7 +344,7 @@ public enum MarkdownBlocks {
                 let cells = tableRowCells[row] ?? [:]
                 table.rows.append((0..<columns).map { cells[$0] ?? AttributedString() })
             }
-            append(.table(table), AttributedString())
+            append(.table(table), AttributedString(), quoted: openTableQuoted)
         }
     }
 }

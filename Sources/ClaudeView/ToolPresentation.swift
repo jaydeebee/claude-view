@@ -31,6 +31,7 @@ enum ToolPresentation {
         switch name {
         case "Bash": candidates = ["description", "command"]
         case "Read", "Edit", "Write": candidates = ["file_path"]
+        case "NotebookEdit": candidates = ["notebook_path"]
         case "Grep", "Glob": candidates = ["pattern"]
         case "Task", "Agent": candidates = ["description", "prompt"]
         case "WebFetch": candidates = ["url"]

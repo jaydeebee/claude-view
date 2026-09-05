@@ -179,6 +179,28 @@ import Testing
         #expect(blocks.last?.isQuoted == false)
     }
 
+    /// Tables never pass through a block flush, so the quoting field the
+    /// flush maintained was already cleared by the time one was emitted.
+    @Test func aQuotedTableKeepsItsBar() {
+        let blocks = MarkdownBlocks.parse(
+            """
+            > | a | b |
+            > | - | - |
+            > | 1 | 2 |
+            """)
+        guard let table = blocks.first(where: {
+            if case .table = $0.kind { return true } else { return false }
+        }) else {
+            Issue.record("expected a table")
+            return
+        }
+        #expect(table.isQuoted)
+
+        // And an unquoted one is still unquoted.
+        let plain = MarkdownBlocks.parse("| a | b |\n| - | - |\n| 1 | 2 |")
+        #expect(plain.contains { if case .table = $0.kind { return !$0.isQuoted } else { return false } })
+    }
+
     /// A continuation paragraph of a list item gets no second bullet —
     /// including when a nested sublist came between it and the item.
     @Test func aContinuationAfterASublistKeepsItsBulletToItself() {
@@ -231,6 +253,10 @@ import Testing
             ```
             """
         #expect(MarkdownBlocks.softenLabelBreaks(fenced) == fenced)
+
+        // An indented code block is code without a fence to say so.
+        let indented = "Example:\n\n    let a = [foo\n    bar](baz)\n"
+        #expect(MarkdownBlocks.softenLabelBreaks(indented) == indented)
 
         // Brackets that are not a link are prose.
         let prose = "a line ending in [TODO\nand the next line"

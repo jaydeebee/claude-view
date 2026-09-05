@@ -61,10 +61,18 @@ private struct TranscriptLoadedView: View {
     /// a sliding scale serves both, plus the stop in between.
     @AppStorage("transcriptDetail") private var detail: DetailLevel = .conversation
     @State private var inspectedEntry: TranscriptEntry?
-    /// Rows in this set do not fade: everything present when the view
-    /// opened, plus every row that has since faded in once. Identity-based
-    /// — filtered rows shift indices, ids never lie.
-    @State private var settledRowIds: Set<String>?
+    /// Rows that do not fade: everything present when the view opened,
+    /// plus every row that has since faded in once. Identity-based —
+    /// filtered rows shift indices, ids never lie.
+    ///
+    /// A reference the view does not observe, deliberately. Marking a row
+    /// settled is bookkeeping about a row, but as `@State` it invalidated
+    /// the whole loaded view — turn grouping, the frontier search over
+    /// every row, every row's expansion binding — once per revealed row,
+    /// which is once per arrival during exactly the burst of arrivals that
+    /// can least afford it. Nothing needs to redraw when a row settles;
+    /// the fade it just finished was its own local animation.
+    @State private var settledRows = SettledRows()
     /// The pending second scroll, cancelled by any scroll that follows it
     /// so a burst of appends settles once, at the end.
     @State private var settleTask: Task<Void, Never>?
@@ -103,12 +111,10 @@ private struct TranscriptLoadedView: View {
                 if follow { scrollToEnd(proxy: proxy) }
             }
             .onAppear {
-                if settledRowIds == nil {
-                    // Seed from ALL rows, not just the displayed ones —
-                    // flipping the internals switch reveals old rows, and
-                    // old rows don't fade in like fresh arrivals.
-                    settledRowIds = Set(model.snapshot.rowIds)
-                }
+                // Seed from ALL rows, not just the displayed ones —
+                // flipping the internals switch reveals old rows, and old
+                // rows don't fade in like fresh arrivals.
+                settledRows.seedIfNeeded(with: model.snapshot.rowIds)
                 scrollToEnd(proxy: proxy, animated: false)
             }
         }
@@ -228,8 +234,7 @@ private struct TranscriptLoadedView: View {
     }
 
     private func isNewRowId(_ id: String) -> Bool {
-        guard let settledRowIds else { return false }
-        return !settledRowIds.contains(id)
+        settledRows.isNew(id)
     }
 
     /// A row fades in the first time it is seen and never again. The flag
@@ -238,7 +243,7 @@ private struct TranscriptLoadedView: View {
     /// scrolling back up replayed the arrival animation on rows that had
     /// arrived minutes ago. Remembered here, where the list is.
     private func markSettled(_ id: String) {
-        settledRowIds?.insert(id)
+        settledRows.mark(id)
     }
 
     private func rowFamily(_ row: SessionRow) -> String {
@@ -405,6 +410,29 @@ private struct TranscriptLoadedView: View {
         case .info, .bookkeeping, .unknown:
             return false
         }
+    }
+}
+
+/// Which rows have already made their entrance. Held by reference and
+/// unobserved: see the property that owns it.
+@MainActor
+final class SettledRows {
+    private var ids: Set<String>?
+
+    func seedIfNeeded(with rowIds: [String]) {
+        guard ids == nil else { return }
+        ids = Set(rowIds)
+    }
+
+    /// Before the seed there is no such thing as a new row — everything on
+    /// screen at that moment was already there.
+    func isNew(_ id: String) -> Bool {
+        guard let ids else { return false }
+        return !ids.contains(id)
+    }
+
+    func mark(_ id: String) {
+        ids?.insert(id)
     }
 }
 

@@ -69,6 +69,13 @@ public enum TranscriptPeek {
         var fallbackTitle: String?
         var newest: (context: Int64, at: Date)?
         var ttl: TimeInterval?
+        // The TTL search walks back past the newest turn looking for one
+        // that actually wrote cache. Bounded, because a session that only
+        // ever reads cache has no such turn anywhere, and unbounded the
+        // search then parses every line of a window that can be 4MB — for
+        // every row of every project, in the scan the first paint waits on.
+        var turnsSinceNewest = 0
+        var ttlSettled = false
 
         for line in tailLines(url: url, window: window).reversed() {
             guard let entry = try? TranscriptEntry(line: Data(line), index: 0) else {
@@ -86,9 +93,17 @@ public enum TranscriptPeek {
                 {
                     newest = (context, at)
                 }
-                if ttl == nil { ttl = cacheTTL(of: usage) }
+                if !ttlSettled {
+                    if let bought = cacheTTL(of: usage) {
+                        ttl = bought
+                        ttlSettled = true
+                    } else if newest != nil {
+                        turnsSinceNewest += 1
+                        ttlSettled = turnsSinceNewest >= Self.ttlSearchDepth
+                    }
+                }
             }
-            if title != nil, newest != nil, ttl != nil { break }
+            if title != nil, newest != nil, ttlSettled { break }
         }
 
         return Summary(
@@ -121,6 +136,10 @@ public enum TranscriptPeek {
         }
         return nil
     }
+
+    /// How many turns back to look for one that wrote cache before
+    /// settling for the short clock.
+    private static let ttlSearchDepth = 20
 
     /// Which cache a turn's write bought, or nil when it wrote none.
     ///
