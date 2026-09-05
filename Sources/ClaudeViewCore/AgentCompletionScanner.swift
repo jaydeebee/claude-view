@@ -26,6 +26,8 @@ public struct AgentCompletionEvents: Sendable {
 public final class AgentCompletionScanner {
     private var tailers: [URL: JSONLTailer] = [:]
     private var accumulated: [URL: AgentCompletionEvents] = [:]
+    /// Consecutive `retain` calls each file has been absent from.
+    private var missedScans: [URL: Int] = [:]
 
     /// A notification names its agent here. Rare in a transcript, so a
     /// hit is worth a parse.
@@ -65,16 +67,35 @@ public final class AgentCompletionScanner {
             || byte == UInt8(ascii: "\n") || byte == UInt8(ascii: "\r")
     }
 
-    /// Forgets every file outside `urls`.
+    /// Forgets files that have been outside `urls` for several calls.
     ///
     /// The scanner lives as long as the sidebar does, and each file it has
     /// ever polled leaves a tailer and an event table behind. On a machine
     /// with a long history that is a slow leak of things nobody will ask
     /// about again, so each scan says what it still cares about.
+    ///
+    /// Not on the first absence, though: forgetting a tailer throws away
+    /// its offset, and the next poll re-reads the whole transcript from
+    /// byte zero — a 30MB read inside the scan the sidebar's first draw
+    /// waits on. A session need only flicker out of the registry for one
+    /// pass, which an unreadable entry mid-write or a single failed
+    /// liveness check will do, to pay that price for nothing.
     public func retain(_ urls: Set<URL>) {
-        tailers = tailers.filter { urls.contains($0.key) }
-        accumulated = accumulated.filter { urls.contains($0.key) }
+        for url in tailers.keys {
+            if urls.contains(url) {
+                missedScans[url] = 0
+            } else {
+                missedScans[url, default: 0] += 1
+            }
+        }
+        for (url, misses) in missedScans where misses >= Self.graceScans {
+            tailers[url] = nil
+            accumulated[url] = nil
+            missedScans[url] = nil
+        }
     }
+
+    private static let graceScans = 3
 
     /// Events accumulated for `url`, after folding in newly appended lines.
     /// A shrunken file (rotation, rewrite) resets its state and rescans.

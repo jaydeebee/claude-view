@@ -170,8 +170,25 @@ import Testing
         #expect(scanner.poll(kept, watching: []).byAgentId.count == 1)
         #expect(scanner.poll(dropped, watching: []).byAgentId.count == 1)
 
+        // One absence is a flicker, not a departure: forgetting a tailer
+        // costs a re-read of the whole transcript next time.
+        scanner.retain([kept])
+        #expect(scanner.current(dropped).byAgentId.count == 1)
+        scanner.retain([kept])
+        #expect(scanner.current(dropped).byAgentId.count == 1)
         scanner.retain([kept])
         #expect(scanner.current(kept).byAgentId.count == 1)
         #expect(scanner.current(dropped).byAgentId.isEmpty)
+
+        // Reappearing resets the count.
+        let revisited = try makeTempFile()
+        defer { try? FileManager.default.removeItem(at: revisited) }
+        try append(Self.notification + "\n", to: revisited)
+        #expect(scanner.poll(revisited, watching: []).byAgentId.count == 1)
+        scanner.retain([kept])
+        scanner.retain([kept, revisited])
+        scanner.retain([kept])
+        scanner.retain([kept])
+        #expect(scanner.current(revisited).byAgentId.count == 1)
     }
 }

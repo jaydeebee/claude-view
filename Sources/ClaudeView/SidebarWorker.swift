@@ -38,6 +38,12 @@ actor SidebarWorker {
     private var runCache: [URL: (dir: Date, journal: Date, run: WorkflowRun)] = [:]
     private var summaryCache: [URL: (modifiedAt: Date, summary: TranscriptPeek.Summary)] = [:]
     private var cwdCache: [URL: String?] = [:]
+    /// Every cache key the scan in progress has used. The caches are cut
+    /// back to it at the end: they are keyed by URL and were only ever
+    /// inserted into, so a machine with a long history accumulated an
+    /// entry per transcript, per project directory and per workflow run,
+    /// for the life of the process.
+    private var touched: Set<URL> = []
 
     init(paths: ClaudePaths) {
         self.paths = paths
@@ -47,6 +53,7 @@ actor SidebarWorker {
 
     func scan() -> SidebarState {
         var state = SidebarState()
+        touched.removeAll(keepingCapacity: true)
         state.liveSessions = registry.liveSessions()
 
         let live = Set(state.liveSessions.compactMap(\.sessionId))
@@ -98,6 +105,11 @@ actor SidebarWorker {
             guard let cwd = session.cwd else { continue }
             state.projectPaths[ClaudePaths.projectSlug(for: cwd)] = cwd
         }
+
+        summaryCache = summaryCache.filter { touched.contains($0.key) }
+        indexCache = indexCache.filter { touched.contains($0.key) }
+        runCache = runCache.filter { touched.contains($0.key) }
+        cwdCache = cwdCache.filter { touched.contains($0.key) }
         return state
     }
 
@@ -113,18 +125,35 @@ actor SidebarWorker {
         for session: RegistrySession, in projects: [ProjectListing]
     ) -> SessionRef? {
         guard let sessionId = session.sessionId else { return nil }
-        if let cwd = session.cwd {
-            let slug = ClaudePaths.projectSlug(for: cwd)
+
+        // What the entry says, when it says anything and the file is
+        // actually there. A cwd can be right about where the session runs
+        // and wrong about where its transcript lives — resume from another
+        // directory, or rename the project — and a ref built on a path
+        // with no file behind it is the same unreachable session as an
+        // entry with no cwd at all: no title, no context count, an empty
+        // pane, and hidden from History because Live is claiming it.
+        if let url = session.transcriptURL(paths: paths),
+            FileManager.default.fileExists(atPath: url.path)
+        {
             return SessionRef(
-                projectSlug: slug,
+                projectSlug: ClaudePaths.projectSlug(for: session.cwd ?? ""),
                 sessionId: sessionId,
-                url: paths.transcriptURL(projectSlug: slug, sessionId: sessionId))
+                url: url)
         }
+        // Otherwise the file is the one named after the session.
         for project in projects {
             if let match = project.transcripts.first(where: { $0.sessionId == sessionId }) {
                 return SessionRef(
                     projectSlug: project.slug, sessionId: sessionId, url: match.url)
             }
+        }
+        // Nothing on disk yet: a session can be registered before it has
+        // written a line. The cwd-derived path is where that line will go.
+        if let url = session.transcriptURL(paths: paths), let cwd = session.cwd {
+            return SessionRef(
+                projectSlug: ClaudePaths.projectSlug(for: cwd),
+                sessionId: sessionId, url: url)
         }
         return nil
     }
@@ -161,6 +190,7 @@ actor SidebarWorker {
     /// Reloaded only when the directory changes — every meta in it is
     /// otherwise re-read and re-parsed on every refresh.
     private func subagentIndex(dir: URL) -> SubagentIndex {
+        touched.insert(dir)
         let mtime = modificationDate(of: dir)
         if let cached = indexCache[dir], cached.modifiedAt == mtime {
             return cached.index
@@ -178,7 +208,8 @@ actor SidebarWorker {
     /// journal without touching the directory around it.
     private func workflowRuns(subagentsDir dir: URL) -> [WorkflowRun] {
         WorkflowRunIndex.runDirectories(subagentsDir: dir).map { runDir in
-            let journal = runDir.appendingPathComponent("journal.jsonl")
+            touched.insert(runDir)
+            let journal = runDir.appendingPathComponent(WorkflowRunIndex.journalFilename)
             let stamps = (modificationDate(of: runDir), modificationDate(of: journal))
             if let cached = runCache[runDir],
                 cached.dir == stamps.0, cached.journal == stamps.1
@@ -197,6 +228,7 @@ actor SidebarWorker {
     /// transcript first, so an abandoned old one cannot name the project.
     private func projectPath(of project: ProjectListing) -> String? {
         for transcript in project.transcripts {
+            touched.insert(transcript.url)
             if let cached = cwdCache[transcript.url] {
                 if let cwd = cached { return cwd }
                 continue
@@ -212,6 +244,7 @@ actor SidebarWorker {
     /// until the file moves. Both come out of the same tail; asking for
     /// them separately opened and read the file twice for every row.
     private func summary(for url: URL, modifiedAt: Date) -> TranscriptPeek.Summary {
+        touched.insert(url)
         if let cached = summaryCache[url], cached.modifiedAt == modifiedAt {
             return cached.summary
         }

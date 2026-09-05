@@ -25,13 +25,15 @@ public final class FSEventsWatcher {
     private let lock = NSLock()
 
     /// Marks the event queue so `stop()` can tell whether it is being
-    /// called from inside a callback.
-    private static let queueMarker = DispatchSpecificKey<Bool>()
-    private let queue: DispatchQueue = {
-        let queue = DispatchQueue(label: "claude-view.fsevents")
-        queue.setSpecific(key: FSEventsWatcher.queueMarker, value: true)
-        return queue
-    }()
+    /// called from inside *this* watcher's callback.
+    ///
+    /// The value is the watcher's identity, not a flag. Marked with a
+    /// flag, any watcher's queue answered for every watcher: two windows
+    /// mean two marked queues, and a stop called on the wrong one took the
+    /// reentrant path and returned without waiting for its own in-flight
+    /// callback — the exact guarantee this method is documented to keep.
+    private static let queueMarker = DispatchSpecificKey<ObjectIdentifier>()
+    private let queue = DispatchQueue(label: "claude-view.fsevents")
 
     public init?(paths: [String], latency: TimeInterval = 0.2, handler: @escaping Handler) {
         self.stream = nil
@@ -73,6 +75,7 @@ public final class FSEventsWatcher {
         else { return nil }
 
         FSEventStreamSetDispatchQueue(stream, queue)
+        queue.setSpecific(key: Self.queueMarker, value: ObjectIdentifier(self))
         // A stream that fails to schedule is the failure this init exists
         // to report. Discarded, it handed back a watcher that looked live
         // and never fired: the sidebar would have gone quiet and fallen
@@ -100,7 +103,7 @@ public final class FSEventsWatcher {
         // safe to release the stream, which frees the handler box with it.
         FSEventStreamInvalidate(stream)
 
-        if DispatchQueue.getSpecific(key: Self.queueMarker) == true {
+        if DispatchQueue.getSpecific(key: Self.queueMarker) == ObjectIdentifier(self) {
             // We are that callback. Waiting for it to finish is waiting
             // for ourselves — a reentrant sync on a serial queue, which is
             // a SIGTRAP, not a hang — and releasing here would free the

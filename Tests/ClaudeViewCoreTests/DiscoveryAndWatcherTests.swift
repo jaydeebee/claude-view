@@ -142,4 +142,60 @@ import Testing
         // release: the check-and-clear is under a lock now.
         box.watcher?.stop()
     }
+
+    /// Two windows mean two watchers, each with its own marked queue. A
+    /// stop called from *another* watcher's callback is not reentrant and
+    /// still has to wait for its own in-flight handler; marked with a
+    /// shared flag it skipped the wait and returned early.
+    @Test func stoppingOneWatcherFromAnothersCallbackStillWaits() throws {
+        let dirs = try (0..<2).map { _ -> URL in
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("watch-pair-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }
+        defer { dirs.forEach { try? FileManager.default.removeItem(at: $0) } }
+
+        let lock = NSLock()
+        var running = 0
+        var finished = 0
+        let busyEntered = DispatchSemaphore(value: 0)
+        let stopReturned = DispatchSemaphore(value: 0)
+        var sawFinishedAtStop = false
+
+        // The watcher whose callback is slow, and will be stopped mid-flight.
+        let busy = FSEventsWatcher(paths: [dirs[0].path], latency: 0.01) { _ in
+            lock.lock()
+            running += 1
+            lock.unlock()
+            busyEntered.signal()
+            Thread.sleep(forTimeInterval: 0.3)
+            lock.lock()
+            finished += 1
+            lock.unlock()
+        }
+        #expect(busy != nil)
+
+        // The watcher whose callback does the stopping, from its own queue.
+        final class Box: @unchecked Sendable { var other: FSEventsWatcher? }
+        let box = Box()
+        box.other = busy
+        let stopper = FSEventsWatcher(paths: [dirs[1].path], latency: 0.01) { _ in
+            box.other?.stop()
+            lock.lock()
+            sawFinishedAtStop = finished == running && running > 0
+            lock.unlock()
+            stopReturned.signal()
+        }
+        #expect(stopper != nil)
+
+        Thread.sleep(forTimeInterval: 0.2)  // let both streams start
+        try Data("a".utf8).write(to: dirs[0].appendingPathComponent("busy.jsonl"))
+        #expect(busyEntered.wait(timeout: .now() + 5) == .success)
+        try Data("b".utf8).write(to: dirs[1].appendingPathComponent("stopper.jsonl"))
+        #expect(stopReturned.wait(timeout: .now() + 5) == .success)
+
+        #expect(sawFinishedAtStop, "stop() returned while its own callback was still running")
+        stopper?.stop()
+    }
 }
