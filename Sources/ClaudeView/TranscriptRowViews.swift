@@ -129,10 +129,18 @@ struct TranscriptRowView: View {
 }
 
 /// A chevron header that shows/hides its content.
+///
+/// The content is a closure, not a view. Stored as a view it was built by
+/// the memberwise init at construction — so `if isExpanded` gated only
+/// whether it was *drawn* — and every materialized tool row flattened its
+/// result, counted the characters, pretty-printed its input and syntax
+/// highlighted the lot on every body pass, collapsed or not. With
+/// multi-megabyte results in the transcript that is real per-frame work
+/// paid for rows nobody has opened.
 struct CollapsibleRow<Header: View, Content: View>: View {
     @Binding var isExpanded: Bool
     @ViewBuilder let header: Header
-    @ViewBuilder let content: Content
+    @ViewBuilder let content: () -> Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -151,7 +159,7 @@ struct CollapsibleRow<Header: View, Content: View>: View {
             }
             .buttonStyle(.plain)
             if isExpanded {
-                content
+                content()
                     .transition(.opacity)
             }
         }

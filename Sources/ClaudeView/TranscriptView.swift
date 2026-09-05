@@ -31,7 +31,6 @@ struct TranscriptView: View {
         .task(id: ref) {
             let model = TranscriptModel(
                 ref: ref, paths: paths, subagentsDir: ref.subagentsDir)
-            model.isLive = isLive
             self.model = model
             // The first load reads and folds the whole file — off the main
             // actor, so a 30MB session spins rather than freezes.
@@ -44,9 +43,6 @@ struct TranscriptView: View {
                 guard !Task.isCancelled else { return }
                 await model.poll()
             }
-        }
-        .onChange(of: isLive) {
-            model?.isLive = isLive
         }
     }
 }
@@ -307,7 +303,6 @@ private struct TranscriptLoadedView: View {
 
     private var rowContext: RowContext {
         RowContext(
-            paths: model.paths,
             sessionRef: ref,
             isLive: isLive,
             onInspect: { inspectedEntry = $0 },

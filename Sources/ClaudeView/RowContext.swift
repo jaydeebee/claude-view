@@ -1,10 +1,10 @@
 import ClaudeViewCore
 import Foundation
 
-/// What every row needs beyond its own data: where it lives, how to open
-/// the inspector, and how to navigate to another session (sub-agent links).
+/// What every row needs beyond its own data: which session it belongs to,
+/// how to open the inspector, and how to navigate to another session
+/// (sub-agent links).
 struct RowContext {
-    let paths: ClaudePaths
     /// The session this row belongs to. Subagent transcripts live in that
     /// session's subagents directory, so nested agents resolve against it.
     let sessionRef: SessionRef

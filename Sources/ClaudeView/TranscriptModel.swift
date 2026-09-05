@@ -71,7 +71,6 @@ final class TranscriptModel {
     /// True once the first load has landed; until then the view has
     /// nothing to draw but a spinner.
     private(set) var hasLoaded = false
-    var isLive = false
 
     @ObservationIgnored
     private let loader: TranscriptLoader
