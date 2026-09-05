@@ -133,11 +133,11 @@ actor SidebarWorker {
         // with no file behind it is the same unreachable session as an
         // entry with no cwd at all: no title, no context count, an empty
         // pane, and hidden from History because Live is claiming it.
-        if let url = session.transcriptURL(paths: paths),
+        if let cwd = session.cwd, let url = session.transcriptURL(paths: paths),
             FileManager.default.fileExists(atPath: url.path)
         {
             return SessionRef(
-                projectSlug: ClaudePaths.projectSlug(for: session.cwd ?? ""),
+                projectSlug: ClaudePaths.projectSlug(for: cwd),
                 sessionId: sessionId,
                 url: url)
         }
