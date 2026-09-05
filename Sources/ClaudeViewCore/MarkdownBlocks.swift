@@ -23,6 +23,21 @@ public struct MarkdownBlock: Identifiable {
     public let id: Int
     public let kind: Kind
     public let content: AttributedString
+    /// True when the block sits inside a blockquote, whatever it is. A
+    /// quoted list is still quoted, and so is a quoted fence — but the
+    /// list and code branches answered first and returned, so anything
+    /// inside a quote that was not a bare paragraph lost the quote
+    /// entirely and rendered as ordinary body text.
+    public let isQuoted: Bool
+
+    public init(
+        id: Int, kind: Kind, content: AttributedString, isQuoted: Bool = false
+    ) {
+        self.id = id
+        self.kind = kind
+        self.content = content
+        self.isQuoted = isQuoted
+    }
 }
 
 /// Block-level Markdown parsing without leaving Foundation.
@@ -35,6 +50,7 @@ public struct MarkdownBlock: Identifiable {
 /// commit listings onto one line.
 public enum MarkdownBlocks {
     public static func parse(_ text: String) -> [MarkdownBlock] {
+        let text = softenLabelBreaks(text)
         let options = AttributedString.MarkdownParsingOptions(
             allowsExtendedAttributes: false,
             interpretedSyntax: .full,
@@ -62,6 +78,76 @@ public enum MarkdownBlocks {
         return builder.blocks
     }
 
+    /// Newlines inside a link or image label, replaced by the space
+    /// CommonMark says they mean.
+    ///
+    /// This has to happen here, in the source text, because Foundation
+    /// drops the character before the run stream exists: the softBreak
+    /// repair above never sees it, and "[the full\nreport](url)" arrives
+    /// as "the fullreport" — two words welded together, in the one place
+    /// a reader is most likely to click.
+    ///
+    /// Fenced code is left alone, since a fence can contain anything and
+    /// its newlines are load-bearing. The pattern is deliberately narrow:
+    /// a bracketed run with no nested brackets, containing a newline,
+    /// followed by the `(` or `[` that makes it a link rather than prose
+    /// that happens to use brackets.
+    static func softenLabelBreaks(_ text: String) -> String {
+        guard text.contains("](") || text.contains("][") else { return text }
+
+        var result: [String] = []
+        var prose: [String] = []
+        var inFence = false
+
+        func flushProse() {
+            guard !prose.isEmpty else { return }
+            result.append(soften(prose.joined(separator: "\n")))
+            prose.removeAll()
+        }
+
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
+                flushProse()
+                result.append(line)
+                inFence.toggle()
+            } else if inFence {
+                result.append(line)
+            } else {
+                prose.append(line)
+            }
+        }
+        flushProse()
+        return result.joined(separator: "\n")
+    }
+
+    private static let labelBreak = try? NSRegularExpression(
+        pattern: #"\[([^\[\]]*\n[^\[\]]*)\](?=[\(\[])"#)
+
+    private static func soften(_ text: String) -> String {
+        guard let labelBreak else { return text }
+        let ns = text as NSString
+        let matches = labelBreak.matches(
+            in: text, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return text }
+
+        var out = ""
+        var cursor = 0
+        for match in matches {
+            let whole = match.range
+            out += ns.substring(with: NSRange(location: cursor, length: whole.location - cursor))
+            let label = ns.substring(with: match.range(at: 1))
+                .components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            out += "[" + label + "]"
+            cursor = whole.location + whole.length
+        }
+        out += ns.substring(from: cursor)
+        return out
+    }
+
     private struct Builder {
         var blocks: [MarkdownBlock] = []
         private var nextId = 0
@@ -69,7 +155,11 @@ public enum MarkdownBlocks {
         private var currentChain: [Int]?
         private var currentComponents: [PresentationIntent.IntentType] = []
         private var currentContent = AttributedString()
-        private var previousListItemIdentity: Int?
+        /// Every list item that has already been given its marker. A set,
+        /// not the previous one: an item's continuation paragraph gets no
+        /// second bullet even when a nested sublist came between them,
+        /// which is exactly when the old check forgot and gave it one.
+        private var markedListItems: Set<Int> = []
 
         private var openTableIdentity: Int?
         private var tableColumnCount = 0
@@ -107,8 +197,14 @@ public enum MarkdownBlocks {
             flushTable()
         }
 
+        /// Set for the duration of one flush, so every `append` in it
+        /// carries the quoting of the block being flushed.
+        private var flushingQuoted = false
+
         private mutating func append(_ kind: MarkdownBlock.Kind, _ content: AttributedString) {
-            blocks.append(MarkdownBlock(id: nextId, kind: kind, content: content))
+            blocks.append(
+                MarkdownBlock(
+                    id: nextId, kind: kind, content: content, isQuoted: flushingQuoted))
             nextId += 1
         }
 
@@ -120,8 +216,10 @@ public enum MarkdownBlocks {
             }
             guard currentChain != nil else { return }
             let components = currentComponents
-            let previousListItem = previousListItemIdentity
-            previousListItemIdentity = nil
+            flushingQuoted = components.contains {
+                if case .blockQuote = $0.kind { return true } else { return false }
+            }
+            defer { flushingQuoted = false }
 
             if components.contains(where: {
                 if case .thematicBreak = $0.kind { return true } else { return false }
@@ -167,17 +265,16 @@ public enum MarkdownBlocks {
                     } ?? containers.first
                 var marker = "•"
                 if case .orderedList = container?.kind { marker = "\(ordinal)." }
-                if previousListItem == components[itemIndex].identity { marker = "" }
-                previousListItemIdentity = components[itemIndex].identity
+                if !markedListItems.insert(components[itemIndex].identity).inserted {
+                    marker = ""  // a continuation paragraph of an item already marked
+                }
                 append(
                     .listItem(marker: marker, indent: max(containers.count, 1)),
                     currentContent)
                 return
             }
 
-            if components.contains(where: {
-                if case .blockQuote = $0.kind { return true } else { return false }
-            }) {
+            if flushingQuoted {
                 append(.blockquote, currentContent)
                 return
             }

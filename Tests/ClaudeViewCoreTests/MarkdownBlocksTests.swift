@@ -154,4 +154,89 @@ import Testing
     @Test func emptyInputYieldsNothing() {
         #expect(MarkdownBlocks.parse("").isEmpty)
     }
+
+    /// A quote containing anything but a bare paragraph lost its quoting:
+    /// the list and code branches answered first and returned.
+    @Test func quotedListsAndFencesStayQuoted() {
+        let blocks = MarkdownBlocks.parse(
+            """
+            > quoted paragraph
+            >
+            > - quoted item
+            > - another
+            >
+            > ```
+            > quoted code
+            > ```
+
+            unquoted paragraph
+            """)
+        let quoted = blocks.filter(\.isQuoted)
+        #expect(quoted.count >= 4, "expected the paragraph, both items and the fence")
+        #expect(quoted.contains { if case .listItem = $0.kind { return true } else { return false } })
+        #expect(quoted.contains { if case .code = $0.kind { return true } else { return false } })
+        // The trailing paragraph is outside the quote.
+        #expect(blocks.last?.isQuoted == false)
+    }
+
+    /// A continuation paragraph of a list item gets no second bullet —
+    /// including when a nested sublist came between it and the item.
+    @Test func aContinuationAfterASublistKeepsItsBulletToItself() {
+        let blocks = MarkdownBlocks.parse(
+            """
+            - outer item
+
+              - inner item
+
+              continuation of the outer item
+            """)
+        let markers = blocks.compactMap { block -> String? in
+            if case .listItem(let marker, _) = block.kind { return marker }
+            return nil
+        }
+        // One marker for the outer item, one for the inner, and nothing
+        // for the continuation.
+        #expect(markers.filter { !$0.isEmpty }.count == 2)
+        #expect(markers.contains(""))
+    }
+
+    /// Foundation drops a newline inside a link label entirely, welding
+    /// the words on either side of it together.
+    @Test func aLinkLabelBrokenAcrossLinesKeepsItsSpace() {
+        let blocks = MarkdownBlocks.parse(
+            """
+            See [the full
+            report](https://example.com/x) for the rest.
+            """)
+        let text = blocks.map { String($0.content.characters) }.joined()
+        #expect(text.contains("the full report"))
+        #expect(!text.contains("fullreport"))
+
+        // Image labels are the same shape, one "!" earlier.
+        #expect(
+            MarkdownBlocks.softenLabelBreaks("![a very\nwide diagram](/x.png)")
+                == "![a very wide diagram](/x.png)")
+        // Reference links close on "[" rather than "(".
+        #expect(
+            MarkdownBlocks.softenLabelBreaks("[the full\nreport][ref]")
+                == "[the full report][ref]")
+    }
+
+    /// Fenced code can contain anything, and its newlines are the content.
+    @Test func labelSofteningLeavesCodeAndProseAlone() {
+        let fenced = """
+            ```
+            let x = [foo
+            bar](baz)
+            ```
+            """
+        #expect(MarkdownBlocks.softenLabelBreaks(fenced) == fenced)
+
+        // Brackets that are not a link are prose.
+        let prose = "a line ending in [TODO\nand the next line"
+        #expect(MarkdownBlocks.softenLabelBreaks(prose) == prose)
+
+        // Nothing to do, nothing done.
+        #expect(MarkdownBlocks.softenLabelBreaks("plain text") == "plain text")
+    }
 }

@@ -300,16 +300,20 @@ struct RawEntryView: View {
     let entry: TranscriptEntry
 
     var body: some View {
-        ScrollView(.horizontal) {
-            Text(JSONHighlight.attributed(entry.raw))
-                .font(.caption.monospaced())
-                .textSelection(.enabled)
-                .padding(8)
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(.quaternary.opacity(0.5)))
-        .padding(.leading, 22)
+        // Wrapped, not scrolled sideways. A raw entry is mostly long string
+        // values, and behind a horizontal scroll bar the end of every one
+        // of them was off the edge of a pane the reader could not widen —
+        // so the answer to "what did this actually say" was always one
+        // more gesture away.
+        Text(JSONHighlight.attributed(entry.raw))
+            .font(.caption.monospaced())
+            .textSelection(.enabled)
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(.quaternary.opacity(0.5)))
+            .padding(.leading, 22)
     }
 }
 

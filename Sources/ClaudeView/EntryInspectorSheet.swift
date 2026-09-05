@@ -31,7 +31,9 @@ struct EntryInspectorSheet: View {
 
             Divider()
 
-            ScrollView([.vertical, .horizontal]) {
+            // Vertical only: the sheet is resizable, so wrapping to its
+            // width is a width the reader chose.
+            ScrollView(.vertical) {
                 Text(JSONHighlight.attributed(entry.raw))
                     .font(.callout.monospaced())
                     .textSelection(.enabled)
