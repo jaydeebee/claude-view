@@ -112,4 +112,34 @@ import Testing
             done == started,
             "stop() returned with \(started - done) of \(started) callbacks still running")
     }
+
+    /// "Stop watching once I have seen what I came for" is the natural way
+    /// to write a one-shot watcher, and it aborted the process: stop()
+    /// waited on the queue it was already running on, which libdispatch
+    /// answers with a trap rather than a hang.
+    @Test func stoppingFromInsideACallbackDoesNotTrap() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("watch-reentrant-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        final class Box: @unchecked Sendable {
+            var watcher: FSEventsWatcher?
+        }
+        let box = Box()
+        let stopped = DispatchSemaphore(value: 0)
+        box.watcher = FSEventsWatcher(paths: [dir.path], latency: 0.01) { _ in
+            box.watcher?.stop()
+            stopped.signal()
+        }
+        #expect(box.watcher != nil)
+
+        Thread.sleep(forTimeInterval: 0.2)  // let the stream start
+        try Data("hello".utf8).write(to: dir.appendingPathComponent("new.jsonl"))
+        #expect(stopped.wait(timeout: .now() + 5) == .success)
+
+        // And a second stop from outside is a no-op rather than a double
+        // release: the check-and-clear is under a lock now.
+        box.watcher?.stop()
+    }
 }

@@ -19,7 +19,19 @@ public final class FSEventsWatcher {
     }
 
     private var stream: FSEventStreamRef?
-    private let queue = DispatchQueue(label: "claude-view.fsevents")
+    /// Guards the check-and-clear in `stop()`. Two stops racing — a window
+    /// closing while the last reference goes — would otherwise both see a
+    /// stream and both release it.
+    private let lock = NSLock()
+
+    /// Marks the event queue so `stop()` can tell whether it is being
+    /// called from inside a callback.
+    private static let queueMarker = DispatchSpecificKey<Bool>()
+    private let queue: DispatchQueue = {
+        let queue = DispatchQueue(label: "claude-view.fsevents")
+        queue.setSpecific(key: FSEventsWatcher.queueMarker, value: true)
+        return queue
+    }()
 
     public init?(paths: [String], latency: TimeInterval = 0.2, handler: @escaping Handler) {
         self.stream = nil
@@ -60,16 +72,26 @@ public final class FSEventsWatcher {
                     kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents))
         else { return nil }
 
-        self.stream = stream
         FSEventStreamSetDispatchQueue(stream, queue)
-        FSEventStreamStart(stream)
+        // A stream that fails to schedule is the failure this init exists
+        // to report. Discarded, it handed back a watcher that looked live
+        // and never fired: the sidebar would have gone quiet and fallen
+        // back to its 15-second heartbeat with nothing to say why.
+        guard FSEventStreamStart(stream) else {
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            return nil
+        }
+        self.stream = stream
     }
 
-    /// Safe from any thread but the event queue itself — nothing on that
-    /// queue holds the watcher, so nothing can call it from there.
+    /// Safe from any thread, including the event queue itself.
     public func stop() {
-        guard let stream else { return }
+        lock.lock()
+        let stream = self.stream
         self.stream = nil
+        lock.unlock()
+        guard let stream else { return }
 
         FSEventStreamStop(stream)
         // Invalidate promises no further callbacks, but says nothing about
@@ -77,8 +99,19 @@ public final class FSEventsWatcher {
         // returns only once that one has finished — and only then is it
         // safe to release the stream, which frees the handler box with it.
         FSEventStreamInvalidate(stream)
-        queue.sync {}
-        FSEventStreamRelease(stream)
+
+        if DispatchQueue.getSpecific(key: Self.queueMarker) == true {
+            // We are that callback. Waiting for it to finish is waiting
+            // for ourselves — a reentrant sync on a serial queue, which is
+            // a SIGTRAP, not a hang — and releasing here would free the
+            // handler box out from under the call still running inside it.
+            // "A handler that stops watching once it has seen what it came
+            // for" is the natural way to write this, and it died.
+            queue.async { FSEventStreamRelease(stream) }
+        } else {
+            queue.sync {}
+            FSEventStreamRelease(stream)
+        }
     }
 
     deinit {
