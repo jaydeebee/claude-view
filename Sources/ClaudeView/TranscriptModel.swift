@@ -26,20 +26,19 @@ actor TranscriptLoader {
     /// snapshot — or nil when nothing changed, so a quiet poll costs an
     /// lseek and the view is left alone.
     func poll() -> SessionSnapshot? {
-        let lines = (try? tailer.poll()) ?? []
-        if tailer.didResetOnLastPoll {
-            entries.removeAll()
-        } else if lines.isEmpty {
-            return nil
-        }
-
-        for line in lines {
+        var appended = 0
+        // Streamed rather than collected: the first poll of a 30MB session
+        // would otherwise hold the raw lines and the entries parsed from
+        // them at the same time, for the whole of the parse.
+        try? tailer.poll(onReset: { entries.removeAll() }) { line in
+            appended += 1
             // A malformed line (harness crash mid-write) shouldn't take the
             // session down with it.
             if let entry = try? TranscriptEntry(line: line, index: entries.count) {
                 entries.append(entry)
             }
         }
+        guard appended > 0 || tailer.didResetOnLastPoll else { return nil }
         reloadSubagentsIfChanged()
         return assembler.assemble(entries: entries)
     }

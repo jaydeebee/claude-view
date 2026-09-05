@@ -31,7 +31,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: url) }
         try append(Self.notification + "\n", to: url)
 
-        let events = AgentCompletionScanner().poll(url)
+        let events = AgentCompletionScanner().poll(url, watching: [])
         #expect(events.byAgentId["fork123"]
             == TranscriptEntry.parseTimestamp("2026-08-23T10:00:00.000Z"))
     }
@@ -44,7 +44,7 @@ import Testing
             {"type":"user","uuid":"u-tn2","timestamp":"2026-08-23T11:00:00Z","message":{"role":"user","content":"<task-notification>\\n<task-id>bg9</task-id>\\n<tool-use-id>toolu_bg9</tool-use-id>\\n<status>killed</status>\\n</task-notification>"}}\n
             """, to: url)
 
-        let events = AgentCompletionScanner().poll(url)
+        let events = AgentCompletionScanner().poll(url, watching: [])
         #expect(events.byAgentId["bg9"] != nil)
         #expect(events.byToolUseId["toolu_bg9"] != nil)
     }
@@ -57,7 +57,7 @@ import Testing
             {"type":"user","uuid":"u-wrap","timestamp":"2026-08-23T12:00:00Z","message":{"role":"user","content":"[SYSTEM NOTIFICATION - NOT USER INPUT]\\nThis is an automated background-task event.\\n\\n<task-notification>\\n<task-id>child7</task-id>\\n<tool-use-id>toolu_child7</tool-use-id>\\n<status>completed</status>\\n</task-notification>"}}\n
             """, to: url)
 
-        let events = AgentCompletionScanner().poll(url)
+        let events = AgentCompletionScanner().poll(url, watching: [])
         #expect(events.byAgentId["child7"] != nil)
         #expect(events.byToolUseId["toolu_child7"] != nil)
     }
@@ -82,7 +82,7 @@ import Testing
             {"type":"attachment","attachment":{"type":"queued_command","prompt":"<task-id>fork456</task-id> finished"}}\n
             """, to: url)
 
-        let events = AgentCompletionScanner().poll(url)
+        let events = AgentCompletionScanner().poll(url, watching: [])
         #expect(events.byAgentId["fork456"] != nil)
     }
 
@@ -92,7 +92,7 @@ import Testing
         let scanner = AgentCompletionScanner()
 
         try append(Self.notification + "\n", to: url)
-        #expect(scanner.poll(url).byAgentId.count == 1)
+        #expect(scanner.poll(url, watching: []).byAgentId.count == 1)
 
         try append(Self.toolResult + "\n", to: url)
         let events = scanner.poll(url, watching: ["toolu_777"])
@@ -110,11 +110,11 @@ import Testing
         let scanner = AgentCompletionScanner()
 
         try append(Self.notification + "\n", to: url)
-        #expect(scanner.poll(url).byAgentId.count == 1)
+        #expect(scanner.poll(url, watching: []).byAgentId.count == 1)
 
         // Replaced with a shorter file: the old session's events are gone.
         try Data("{\"fresh\":1}\n".utf8).write(to: url)
-        #expect(scanner.poll(url).byAgentId.isEmpty)
+        #expect(scanner.poll(url, watching: []).byAgentId.isEmpty)
     }
 
     @Test func unrelatedAndMalformedLinesAreIgnored() throws {
@@ -127,8 +127,51 @@ import Testing
             {"type":"user","uuid":"u-plain","message":{"role":"user","content":"just a prompt"}}\n
             """, to: url)
 
-        let events = AgentCompletionScanner().poll(url)
+        let events = AgentCompletionScanner().poll(url, watching: [])
         #expect(events.byAgentId.isEmpty)
         #expect(events.byToolUseId.isEmpty)
+    }
+
+    /// The screen reads bytes, so it has to cope with the whitespace JSON
+    /// allows. Pinned to the compact form it silently saw no tool results
+    /// at all.
+    @Test func spacedJSONIsStillScreened() throws {
+        #expect(
+            AgentCompletionScanner.toolUseId(
+                in: Data(#"{"type":"tool_result","tool_use_id":"toolu_1"}"#.utf8))
+                == "toolu_1")
+        #expect(
+            AgentCompletionScanner.toolUseId(
+                in: Data(#"{"type": "tool_result", "tool_use_id" : "toolu_2"}"#.utf8))
+                == "toolu_2")
+        // A tab is whitespace JSON allows and a JSONL line can carry.
+        #expect(
+            AgentCompletionScanner.toolUseId(
+                in: Data(#"{"tool_use_id":\#t"toolu_3"}"#.utf8)) == "toolu_3")
+        // A key that isn't followed by a string value is not an id.
+        #expect(
+            AgentCompletionScanner.toolUseId(
+                in: Data(#"{"tool_use_id":null}"#.utf8)) == nil)
+        #expect(AgentCompletionScanner.toolUseId(in: Data(#"{"other":"x"}"#.utf8)) == nil)
+    }
+
+    /// The scanner outlives every session it looks at, so it has to be
+    /// told what is still worth remembering.
+    @Test func retainForgetsFilesOutsideTheSet() throws {
+        let kept = try makeTempFile()
+        let dropped = try makeTempFile()
+        defer {
+            try? FileManager.default.removeItem(at: kept)
+            try? FileManager.default.removeItem(at: dropped)
+        }
+        let scanner = AgentCompletionScanner()
+        try append(Self.notification + "\n", to: kept)
+        try append(Self.notification + "\n", to: dropped)
+        #expect(scanner.poll(kept, watching: []).byAgentId.count == 1)
+        #expect(scanner.poll(dropped, watching: []).byAgentId.count == 1)
+
+        scanner.retain([kept])
+        #expect(scanner.current(kept).byAgentId.count == 1)
+        #expect(scanner.current(dropped).byAgentId.isEmpty)
     }
 }

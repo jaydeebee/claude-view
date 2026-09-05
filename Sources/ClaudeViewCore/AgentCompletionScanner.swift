@@ -30,7 +30,7 @@ public final class AgentCompletionScanner {
     /// A notification names its agent here. Rare in a transcript, so a
     /// hit is worth a parse.
     private static let taskIdScreen = Data("task-id".utf8)
-    private static let toolUseIdKey = Data("\"tool_use_id\":\"".utf8)
+    private static let toolUseIdKey = Data("\"tool_use_id\"".utf8)
 
     public init() {}
 
@@ -38,11 +38,42 @@ public final class AgentCompletionScanner {
     /// bytes. Screening on the literal `tool_use_id` instead would match
     /// every tool result in the file — which is where all the megabytes
     /// are — and parsing those is the cost this exists to avoid.
+    ///
+    /// Whatever JSON allows between the key and its value is stepped over.
+    /// The harness writes compact and the old form matched only that, so a
+    /// single space after the colon would have silently stopped the
+    /// sidebar from ever noticing an agent finish — a format the app does
+    /// not own should not be pinned that tightly.
     static func toolUseId(in line: Data) -> String? {
         guard let key = line.range(of: toolUseIdKey) else { return nil }
-        guard let end = line[key.upperBound...].firstIndex(of: UInt8(ascii: "\""))
-        else { return nil }
-        return String(decoding: line[key.upperBound..<end], as: UTF8.self)
+        var i = key.upperBound
+        func skipSpace() {
+            while i < line.endIndex, isJSONSpace(line[i]) { i = line.index(after: i) }
+        }
+        skipSpace()
+        guard i < line.endIndex, line[i] == UInt8(ascii: ":") else { return nil }
+        i = line.index(after: i)
+        skipSpace()
+        guard i < line.endIndex, line[i] == UInt8(ascii: "\"") else { return nil }
+        i = line.index(after: i)
+        guard let end = line[i...].firstIndex(of: UInt8(ascii: "\"")) else { return nil }
+        return String(decoding: line[i..<end], as: UTF8.self)
+    }
+
+    private static func isJSONSpace(_ byte: UInt8) -> Bool {
+        byte == UInt8(ascii: " ") || byte == UInt8(ascii: "\t")
+            || byte == UInt8(ascii: "\n") || byte == UInt8(ascii: "\r")
+    }
+
+    /// Forgets every file outside `urls`.
+    ///
+    /// The scanner lives as long as the sidebar does, and each file it has
+    /// ever polled leaves a tailer and an event table behind. On a machine
+    /// with a long history that is a slow leak of things nobody will ask
+    /// about again, so each scan says what it still cares about.
+    public func retain(_ urls: Set<URL>) {
+        tailers = tailers.filter { urls.contains($0.key) }
+        accumulated = accumulated.filter { urls.contains($0.key) }
     }
 
     /// Events accumulated for `url`, after folding in newly appended lines.
@@ -50,8 +81,10 @@ public final class AgentCompletionScanner {
     ///
     /// `watching` names the tool calls whose results matter — the Task
     /// calls that spawned agents. Every other tool result is skipped
-    /// without being parsed.
-    public func poll(_ url: URL, watching toolUseIds: Set<String> = []) -> AgentCompletionEvents {
+    /// without being parsed. It has no default: an empty set turns tool
+    /// result detection off entirely, which is a thing to ask for out
+    /// loud, not to fall into by leaving an argument off.
+    public func poll(_ url: URL, watching toolUseIds: Set<String>) -> AgentCompletionEvents {
         let tailer: JSONLTailer
         if let existing = tailers[url] {
             tailer = existing
@@ -59,21 +92,24 @@ public final class AgentCompletionScanner {
             tailer = JSONLTailer(url: url)
             tailers[url] = tailer
         }
-        let lines = (try? tailer.poll()) ?? []
-        if tailer.didResetOnLastPoll {
-            accumulated[url] = AgentCompletionEvents()
-        }
-        guard !lines.isEmpty else { return current(url) }
 
         var events = current(url)
-        for line in lines {
+        var changed = false
+        // Streamed: the scanner screens each line and keeps almost none of
+        // them, so there is no reason for the file to arrive as an array.
+        try? tailer.poll(onReset: {
+            events = AgentCompletionEvents()
+            changed = true
+        }) { line in
+            changed = true
             let carriesEvent =
                 line.range(of: Self.taskIdScreen) != nil
                 || Self.toolUseId(in: line).map(toolUseIds.contains) == true
             guard carriesEvent, let entry = try? TranscriptEntry(line: line, index: 0)
-            else { continue }
+            else { return }
             fold(entry, into: &events)
         }
+        guard changed else { return current(url) }
         accumulated[url] = events
         return events
     }

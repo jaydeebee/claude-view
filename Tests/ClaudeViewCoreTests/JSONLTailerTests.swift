@@ -84,4 +84,42 @@ import Testing
         defer { try? FileManager.default.removeItem(at: url) }
         #expect(try tailer.poll().count == 1)
     }
+
+    /// The streaming form is what the transcript loader and the completion
+    /// scanner use, so it has to agree with the collected one — including
+    /// about a file that shrank, which the callers learn about here rather
+    /// than after the fact.
+    @Test func streamingPollMatchesTheCollectedFormAndAnnouncesAReset() throws {
+        let url = try makeTempFile()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let tailer = JSONLTailer(url: url)
+
+        try append("{\"a\":1}\n{\"b\":2}\n", to: url)
+        var streamed: [String] = []
+        var resets = 0
+        try tailer.poll(onReset: { resets += 1 }) { line in
+            streamed.append(String(decoding: line, as: UTF8.self))
+        }
+        #expect(streamed == ["{\"a\":1}", "{\"b\":2}"])
+        #expect(resets == 0)
+
+        // Quiet poll: no lines, no reset.
+        streamed.removeAll()
+        try tailer.poll(onReset: { resets += 1 }) { streamed.append(String(decoding: $0, as: UTF8.self)) }
+        #expect(streamed.isEmpty)
+        #expect(resets == 0)
+
+        // Replaced by a shorter file: the reset lands before any line, so a
+        // caller can throw away what it accumulated from the old one.
+        try Data("{\"z\":9}\n".utf8).write(to: url)
+        var linesAfterReset: [String] = []
+        var resetCameFirst = false
+        try tailer.poll(onReset: { resets += 1; resetCameFirst = linesAfterReset.isEmpty }) {
+            linesAfterReset.append(String(decoding: $0, as: UTF8.self))
+        }
+        #expect(resets == 1)
+        #expect(resetCameFirst)
+        #expect(linesAfterReset == ["{\"z\":9}"])
+        #expect(tailer.didResetOnLastPoll)
+    }
 }

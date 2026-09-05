@@ -59,6 +59,7 @@ actor SidebarWorker {
 
         // Live sessions first: their refs are what the agent trees hang off.
         var seen = Set<String>()
+        var scanned: Set<URL> = []
         for session in state.liveSessions {
             guard let sessionId = session.sessionId, let cwd = session.cwd,
                 seen.insert(sessionId).inserted
@@ -70,7 +71,13 @@ actor SidebarWorker {
             state.agentTrees[sessionId] = tree
             record(tree, into: &state)
             state.usage[url] = usage(for: url)
+            scanned.insert(url)
+            collectURLs(tree, into: &scanned)
         }
+        // Only this pass's files are worth remembering. A session that ends
+        // is never polled again, and its tailer and event table would
+        // otherwise sit in the scanner for as long as the app runs.
+        completionScanner.retain(scanned)
 
         for project in state.projects {
             for transcript in project.transcripts {
@@ -85,6 +92,15 @@ actor SidebarWorker {
             state.projectPaths[ClaudePaths.projectSlug(for: cwd)] = cwd
         }
         return state
+    }
+
+    /// Every transcript in an agent tree, which is every file the
+    /// completion scanner could have been asked about this pass.
+    private func collectURLs(_ agents: [ActiveSubagent], into urls: inout Set<URL>) {
+        for agent in agents {
+            urls.insert(agent.ref.url)
+            collectURLs(agent.children, into: &urls)
+        }
     }
 
     private func record(_ agents: [ActiveSubagent], into state: inout SidebarState) {
