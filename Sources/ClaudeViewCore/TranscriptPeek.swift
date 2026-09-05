@@ -71,22 +71,40 @@ public enum TranscriptPeek {
     /// the window is larger than the title's because a session can end on
     /// a bulky tool result. Nil when no turn is in reach.
     public static func quickUsage(url: URL, window: Int = 1 << 18) -> ContextUsage? {
+        var newest: (context: Int64, at: Date)?
+        var ttl: TimeInterval?
         for line in tailLines(url: url, window: window).reversed() {
             guard let entry = try? TranscriptEntry(line: Data(line), index: 0),
                 entry.kind == .assistant, !entry.isSidechain,
-                let usage = entry.usage,
-                let at = entry.timestamp
+                let usage = entry.usage
             else { continue }
-            guard let context = contextTokens(of: usage) else { continue }
-            // The usage names which TTL the cache write bought; entries
-            // predating the breakdown default to the short clock.
-            let oneHour =
-                usage["cache_creation"]?["ephemeral_1h_input_tokens"]?.intValue ?? 0
-            return ContextUsage(
-                contextTokens: Int64(context),
-                at: at,
-                cacheTTL: oneHour > 0 ? 3600 : 300)
+            if newest == nil, let at = entry.timestamp,
+                let context = contextTokens(of: usage)
+            {
+                newest = (context, at)
+            }
+            if ttl == nil { ttl = cacheTTL(of: usage) }
+            if newest != nil, ttl != nil { break }
         }
+        guard let newest else { return nil }
+        // No turn in the window wrote cache at all: the short clock is the
+        // safe guess, since it only under-promises warmth.
+        return ContextUsage(
+            contextTokens: newest.context, at: newest.at, cacheTTL: ttl ?? 300)
+    }
+
+    /// Which cache a turn's write bought, or nil when it wrote none.
+    ///
+    /// Read off the newest turn alone this was wrong for every session
+    /// that ends on turns with an all-zero breakdown: no 1h number meant
+    /// 5m, so an hour-cached session reported as five minutes and the
+    /// sidebar called it cold while it was still warm. Only a turn that
+    /// actually wrote cache is evidence, so the search walks back until
+    /// one does.
+    private static func cacheTTL(of usage: JSONValue) -> TimeInterval? {
+        guard let creation = usage["cache_creation"] else { return nil }
+        if (creation["ephemeral_1h_input_tokens"]?.intValue ?? 0) > 0 { return 3600 }
+        if (creation["ephemeral_5m_input_tokens"]?.intValue ?? 0) > 0 { return 300 }
         return nil
     }
 
@@ -122,21 +140,46 @@ public enum TranscriptPeek {
         return lines
     }
 
+    /// How far tailLines will widen its window chasing a complete line.
+    /// A transcript can end on a multi-megabyte line — an inline base64
+    /// image, a giant tool result — and everything useful sits behind it.
+    private static let maxTailWindow: UInt64 = 1 << 22
+
     /// The complete lines within the last `window` bytes of the file.
+    ///
+    /// Two ways the obvious version comes back empty-handed:
+    ///
+    /// Dropping the first line is right only when the window opened
+    /// mid-line. When it opens exactly on a line start — which for a
+    /// fixed window is a matter of luck — the line dropped is complete,
+    /// and for a caller reading the tail it is the newest one. So the
+    /// read starts a byte early: that byte says which case this is.
+    ///
+    /// And a line longer than the window leaves nothing complete at all,
+    /// so a session that ends on a huge line had no title and no context
+    /// count anywhere in the sidebar. The window widens until it finds a
+    /// line, reaches the head of the file, or gives up at `maxTailWindow`.
     private static func tailLines(url: URL, window: Int) -> [Data.SubSequence] {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return [] }
         defer { try? handle.close() }
         guard let size = try? handle.seekToEnd(), size > 0 else { return [] }
 
-        let start = size > UInt64(window) ? size - UInt64(window) : 0
-        guard (try? handle.seek(toOffset: start)) != nil,
-            let data = try? handle.readToEnd()
-        else { return [] }
+        var window = UInt64(max(window, 1))
+        while true {
+            let start = size > window ? size - window : 0
+            let readFrom = start > 0 ? start - 1 : 0
+            guard (try? handle.seek(toOffset: readFrom)) != nil,
+                let data = try? handle.readToEnd()
+            else { return [] }
 
-        var lines = data.split(separator: UInt8(ascii: "\n"))
-        if start > 0, !lines.isEmpty {
-            lines.removeFirst()  // partial line cut by the window
+            var lines = data.split(separator: UInt8(ascii: "\n"))
+            if start > 0, data.first != UInt8(ascii: "\n"), !lines.isEmpty {
+                lines.removeFirst()  // partial line cut by the window
+            }
+            if !lines.isEmpty || start == 0 || window >= Self.maxTailWindow {
+                return lines
+            }
+            window = min(window * 4, Self.maxTailWindow)
         }
-        return lines
     }
 }

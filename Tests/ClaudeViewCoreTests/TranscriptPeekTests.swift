@@ -92,6 +92,52 @@ import Testing
         #expect(try #require(TranscriptPeek.quickUsage(url: url)).cacheTTL == 3600)
     }
 
+    /// The window has to open somewhere, and sometimes it opens exactly on
+    /// a line start. Dropping that line as a partial loses the newest thing
+    /// the tail had to say.
+    @Test func aLineOnTheWindowBoundaryIsNotDropped() throws {
+        let title = #"{"type":"ai-title","aiTitle":"Boundary title","sessionId":"s"}"#
+        let filler = #"{"type":"user","message":{"role":"user","content":"x"},"uuid":"u"}"#
+        let url = try write([filler, title, filler])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        // Exactly the bytes of the last two lines, so the window opens on
+        // the first byte of the title.
+        let window = (title + "\n" + filler + "\n").utf8.count
+        #expect(TranscriptPeek.quickTitle(url: url, window: window) == "Boundary title")
+    }
+
+    /// A transcript can end on a line bigger than the whole window — an
+    /// inline image, a giant tool result. Everything the tail is read for
+    /// sits behind it.
+    @Test func aFinalLineLongerThanTheWindowDoesNotHideTheRest() throws {
+        let title = #"{"type":"ai-title","aiTitle":"Behind the wall","sessionId":"s"}"#
+        let payload = String(repeating: "x", count: 200_000)
+        let huge = #"{"type":"user","message":{"role":"user","content":"\#(payload)"},"uuid":"u"}"#
+        let url = try write([title, huge])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        #expect(TranscriptPeek.quickTitle(url: url, window: 1024) == "Behind the wall")
+    }
+
+    /// A turn that wrote no cache says nothing about the TTL. Reading the
+    /// newest turn alone, an all-zero breakdown looked like a 5m write and
+    /// an hour-cached session reported five minutes of warmth.
+    @Test func theLongClockSurvivesTurnsThatWroteNoCache() throws {
+        let url = try write([
+            #"{"type":"assistant","uuid":"a1","timestamp":"2026-08-23T10:00:00Z","message":{"role":"assistant","usage":{"input_tokens":2,"cache_read_input_tokens":500,"cache_creation_input_tokens":40,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":40}},"content":[{"type":"text","text":"bought an hour"}]}}"#,
+            #"{"type":"assistant","uuid":"a2","timestamp":"2026-08-23T10:30:00Z","message":{"role":"assistant","usage":{"input_tokens":1,"cache_read_input_tokens":900,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}},"content":[{"type":"text","text":"wrote nothing"}]}}"#,
+        ])
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let usage = try #require(TranscriptPeek.quickUsage(url: url))
+        // Size and clock start come from the newest turn …
+        #expect(usage.contextTokens == 901)
+        #expect(usage.at == TranscriptEntry.parseTimestamp("2026-08-23T10:30:00Z"))
+        // … the TTL from the newest turn that actually bought one.
+        #expect(usage.cacheTTL == 3600)
+    }
+
     @Test func sidechainAndEmptyUsageEntriesAreSkipped() throws {
         let url = try write([
             #"{"type":"assistant","uuid":"a1","timestamp":"2026-08-23T09:00:00Z","message":{"role":"assistant","usage":{"input_tokens":3,"cache_read_input_tokens":700,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"main"}]}}"#,
