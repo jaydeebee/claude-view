@@ -41,18 +41,6 @@ public struct TranscriptEntry: Sendable, Identifiable {
             default: self = .unknown(typeString)
             }
         }
-
-        /// Sidecar entries carry session state (title, mode, …) rather than
-        /// conversation content; they update the header instead of adding rows.
-        public var isSidecar: Bool {
-            switch self {
-            case .aiTitle, .lastPrompt, .mode, .permissionMode,
-                .queueOperation, .fileHistorySnapshot, .fileHistoryDelta:
-                return true
-            default:
-                return false
-            }
-        }
     }
 
     public let raw: JSONValue

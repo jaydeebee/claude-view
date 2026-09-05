@@ -17,33 +17,42 @@ import Testing
         var lineCount = 0
         var unknownKinds = Set<String>()
 
-        let projectDirs = (try? fm.contentsOfDirectory(
-            at: paths.projectsDir, includingPropertiesForKeys: nil)) ?? []
-        for projectDir in projectDirs {
-            let transcripts = ((try? fm.contentsOfDirectory(
-                at: projectDir, includingPropertiesForKeys: nil)) ?? [])
-                .filter { $0.pathExtension == "jsonl" }
-            for url in transcripts {
-                let data = try Data(contentsOf: url)
-                var index = 0
-                for line in data.split(separator: UInt8(ascii: "\n")) where !line.isEmpty {
-                    let entry = try TranscriptEntry(line: Data(line), index: index)
-                    if case .unknown(let type) = entry.kind {
-                        unknownKinds.insert(type)
-                    }
-                    index += 1
-                    lineCount += 1
+        // Every transcript under projects/, not just the sessions' own:
+        // agents live in <session>/subagents/, workflow agents a directory
+        // deeper again, and on this machine that is 145 of the 155 files.
+        // Drift that lands in an agent transcript first — the assembler's
+        // duplicate-id bug did — is invisible to a listing that only reads
+        // the top level.
+        let transcripts = (fm.enumerator(
+            at: paths.projectsDir, includingPropertiesForKeys: nil)?
+            .compactMap { $0 as? URL } ?? [])
+            .filter {
+                // Journals are JSONL under the same tree but are not
+                // transcripts; SessionAssembler reads them in its own mode.
+                $0.pathExtension == "jsonl"
+                    && $0.lastPathComponent != WorkflowRunIndex.journalFilename
+            }
+        for url in transcripts {
+            let data = try Data(contentsOf: url)
+            var index = 0
+            for line in data.split(separator: UInt8(ascii: "\n")) where !line.isEmpty {
+                let entry = try TranscriptEntry(line: Data(line), index: index)
+                if case .unknown(let type) = entry.kind {
+                    unknownKinds.insert(type)
                 }
+                index += 1
+                lineCount += 1
             }
         }
 
         #expect(lineCount > 0, "no transcripts found — is ~/.claude present?")
+        #expect(transcripts.count > 0)
         // Not a failure: new kinds render as raw JSON. Surface them here so
         // format drift is visible in test output.
         if !unknownKinds.isEmpty {
             print("canary: unknown entry kinds observed: \(unknownKinds.sorted())")
         }
-        print("canary: parsed \(lineCount) lines")
+        print("canary: parsed \(lineCount) lines from \(transcripts.count) transcripts")
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["CLAUDE_VIEW_REAL_DATA"] == "1"))

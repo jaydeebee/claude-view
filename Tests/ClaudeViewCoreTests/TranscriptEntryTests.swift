@@ -99,7 +99,6 @@ enum Fixtures {
     @Test func sidecarEntries() throws {
         let e = try Fixtures.entry(Fixtures.aiTitle)
         #expect(e.kind == .aiTitle)
-        #expect(e.kind.isSidecar)
         #expect(e.aiTitle == "Fix foo.swift loop bounds")
         #expect(e.uuid == nil)
         #expect(e.id == "#0")
@@ -108,7 +107,9 @@ enum Fixtures {
     @Test func unknownKindsSurviveWithRawIntact() throws {
         let e = try Fixtures.entry(Fixtures.mysteryEntry)
         #expect(e.kind == .unknown("hologram-checkpoint"))
-        #expect(!e.kind.isSidecar)
+        // Bookkeeping or content is decided by the uuid, not by the type:
+        // this one has one, so it is content the app has never met.
+        #expect(e.uuid != nil)
         #expect(e.raw["payload"]?["future"]?.stringValue == "format")
         #expect(e.raw.prettyPrinted.contains("\"hologram-checkpoint\""))
     }
