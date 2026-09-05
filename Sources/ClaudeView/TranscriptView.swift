@@ -68,6 +68,9 @@ private struct TranscriptLoadedView: View {
     /// Rows not in this set arrived after the view opened — they fade in.
     /// Identity-based: filtered rows shift indices, ids never lie.
     @State private var initialRowIds: Set<String>?
+    /// The pending second scroll, cancelled by any scroll that follows it
+    /// so a burst of appends settles once, at the end.
+    @State private var settleTask: Task<Void, Never>?
 
     private static let tailAnchor = "transcript-tail"
 
@@ -96,6 +99,11 @@ private struct TranscriptLoadedView: View {
             // trigger immune to the display-row filter's comings and goings.
             .onChange(of: model.snapshot.entryCount) {
                 scrollToEnd(proxy: proxy)
+            }
+            // Turning Follow on is a request to be at the tail now, not a
+            // subscription that begins with the next appended row.
+            .onChange(of: follow) {
+                if follow { scrollToEnd(proxy: proxy) }
             }
             .onAppear {
                 if initialRowIds == nil {
@@ -317,6 +325,16 @@ private struct TranscriptLoadedView: View {
         }
     }
 
+    /// Scrolls to the tail, then again once the layout has stopped moving.
+    ///
+    /// The update that appends a row also collapses rows above it — the
+    /// frontier moves on, so the tool call that was open folds shut, and a
+    /// new prompt folds the turn that is now third from last. Those heights
+    /// come out over the collapse animation, after the scroll has been
+    /// resolved against the taller layout, which leaves the viewport past
+    /// the end of content that is now shorter: the blank pane you have to
+    /// scroll up out of. Asking a second time, once the animations are
+    /// done, lands on the tail that actually exists.
     private func scrollToEnd(proxy: ScrollViewProxy, animated: Bool = true) {
         guard follow else { return }
         if animated {
@@ -324,6 +342,14 @@ private struct TranscriptLoadedView: View {
                 proxy.scrollTo(Self.tailAnchor, anchor: .bottom)
             }
         } else {
+            proxy.scrollTo(Self.tailAnchor, anchor: .bottom)
+        }
+        settleTask?.cancel()
+        settleTask = Task { @MainActor in
+            // Past the 0.2s scroll and the row's 0.15s collapse, both of
+            // which start now.
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, follow else { return }
             proxy.scrollTo(Self.tailAnchor, anchor: .bottom)
         }
     }
