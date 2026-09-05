@@ -61,17 +61,63 @@ public struct SessionRegistry: Sendable {
                 else { return nil }
                 return RegistrySession(raw: raw)
             }
-            .filter { session in
-                guard let pid = session.pid else { return false }
-                return Self.isProcessAlive(pid)
-            }
+            .filter(Self.isLive)
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
     }
+
+    /// Whether the process named by an entry is the process that wrote it.
+    ///
+    /// pids are recycled. `kill(pid, 0)` answers "something is running
+    /// under that number", which for an entry left behind by a crash
+    /// becomes true again the moment the number comes round — and then a
+    /// session that ended days ago sits at the top of the sidebar with a
+    /// live dot for as long as the app runs, while History, which hides
+    /// whatever Live is claiming, will not show it either. The session is
+    /// not merely mislabelled; it is unreachable.
+    ///
+    /// A process that inherited the number started after the session that
+    /// wrote the entry last touched it. The process that wrote the entry
+    /// started before. That is the whole test.
+    ///
+    /// It holds for resumed sessions too, where `startedAt` may predate
+    /// the current process: the comparison is against the last heartbeat,
+    /// which a running process necessarily wrote after starting. Where the
+    /// kernel will not say when a process began, or the entry carries no
+    /// timestamps, the pid alone decides — as it always did.
+    public static func isLive(_ session: RegistrySession) -> Bool {
+        guard let pid = session.pid, isProcessAlive(pid) else { return false }
+        guard let began = processStart(of: pid),
+            let lastSeen = session.updatedAt ?? session.startedAt
+        else { return true }
+        return began <= lastSeen.addingTimeInterval(Self.clockSlack)
+    }
+
+    /// The registry entry is written a beat after the process starts, so
+    /// the comparison needs a little room.
+    private static let clockSlack: TimeInterval = 5
 
     /// `kill(pid, 0)` probes existence without signaling. EPERM still means
     /// the process exists — it just isn't ours.
     public static func isProcessAlive(_ pid: Int32) -> Bool {
         guard pid > 0 else { return false }
         return kill(pid, 0) == 0 || errno == EPERM
+    }
+
+    /// When the process holding `pid` started, straight from the kernel,
+    /// or nil when there is no such process or it will not say.
+    public static func processStart(of pid: Int32) -> Date? {
+        guard pid > 0 else { return nil }
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        let ok = mib.withUnsafeMutableBufferPointer { mib in
+            sysctl(mib.baseAddress, UInt32(mib.count), &info, &size, nil, 0) == 0
+        }
+        guard ok, size >= MemoryLayout<kinfo_proc>.stride, info.kp_proc.p_pid == pid
+        else { return nil }
+        let started = info.kp_proc.p_starttime
+        return Date(
+            timeIntervalSince1970: Double(started.tv_sec)
+                + Double(started.tv_usec) / 1_000_000)
     }
 }

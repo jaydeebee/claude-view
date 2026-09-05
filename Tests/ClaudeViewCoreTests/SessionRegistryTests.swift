@@ -5,14 +5,23 @@ import Testing
 
 @Suite struct SessionRegistryTests {
     /// Fixture mirroring a real registry entry (v2.1.221), scrubbed.
-    private func registryJSON(pid: Int32, sessionId: String = "sess-1") -> String {
-        """
-        {"pid":\(pid),"sessionId":"\(sessionId)","cwd":"/Users/x/src/app",\
-        "startedAt":1787413334765,"procStart":"Sat Aug 22 15:42:10 2026",\
-        "version":"2.1.221","peerProtocol":1,"kind":"interactive",\
-        "entrypoint":"cli","name":"app-5c","nameSource":"derived",\
-        "status":"busy","updatedAt":1787413874925,"statusUpdatedAt":1787413874925}
-        """
+    /// `stamp` is when the session last said anything. Left alone it is a
+    /// fixed date in the past, which is what the field-parsing tests want;
+    /// a liveness test has to pass something the running pid could
+    /// plausibly have written, since a pid older than its own entry is the
+    /// signature of a reused one.
+    private func registryJSON(
+        pid: Int32, sessionId: String = "sess-1", stamp: Date? = nil
+    ) -> String {
+        let started = stamp.map { $0.timeIntervalSince1970 * 1000 } ?? 1_787_413_334_765
+        let updated = stamp.map { $0.timeIntervalSince1970 * 1000 } ?? 1_787_413_874_925
+        return """
+            {"pid":\(pid),"sessionId":"\(sessionId)","cwd":"/Users/x/src/app",\
+            "startedAt":\(Int64(started)),"procStart":"Sat Aug 22 15:42:10 2026",\
+            "version":"2.1.221","peerProtocol":1,"kind":"interactive",\
+            "entrypoint":"cli","name":"app-5c","nameSource":"derived",\
+            "status":"busy","updatedAt":\(Int64(updated)),"statusUpdatedAt":\(Int64(updated))}
+            """
     }
 
     private func makeFakeClaudeHome() throws -> ClaudePaths {
@@ -45,7 +54,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: paths.home) }
 
         let alivePid = ProcessInfo.processInfo.processIdentifier
-        try Data(registryJSON(pid: alivePid, sessionId: "alive").utf8)
+        try Data(registryJSON(pid: alivePid, sessionId: "alive", stamp: Date()).utf8)
             .write(to: paths.sessionsDir.appendingPathComponent("\(alivePid).json"))
         // 99999 exceeds macOS's default pid range; treat as a crashed leftover.
         try Data(registryJSON(pid: 99999, sessionId: "stale").utf8)
@@ -81,5 +90,38 @@ import Testing
         let sessions = SessionRegistry(paths: paths).liveSessions()
         #expect(sessions.isEmpty)
         #expect(RegistrySession(raw: try JSONValue(data: Data(#"{"pid":3000000000}"#.utf8))).pid == nil)
+    }
+
+    /// This process is alive and this process did not exist in 2020, so an
+    /// entry claiming both is an entry whose pid has been reused. Before,
+    /// the pid alone answered, and the dead session stayed live forever.
+    @Test func aReusedPidDoesNotKeepADeadSessionLive() {
+        let mine = Int(ProcessInfo.processInfo.processIdentifier)
+        func entry(lastSeen: Date) -> RegistrySession {
+            RegistrySession(raw: .object([
+                "pid": .integer(Int64(mine)),
+                "sessionId": .string("s1"),
+                "cwd": .string("/tmp/x"),
+                "startedAt": .number(lastSeen.timeIntervalSince1970 * 1000),
+                "updatedAt": .number(lastSeen.timeIntervalSince1970 * 1000),
+            ]))
+        }
+        #expect(!SessionRegistry.isLive(entry(lastSeen: Date(timeIntervalSince1970: 1_600_000_000))))
+        #expect(SessionRegistry.isLive(entry(lastSeen: Date())))
+
+        // The kernel knows when this process began, and it is not the epoch.
+        let began = try? #require(SessionRegistry.processStart(of: Int32(mine)))
+        #expect((began?.timeIntervalSinceNow ?? 0) <= 0)
+        #expect(SessionRegistry.processStart(of: 0) == nil)
+    }
+
+    /// An entry with no timestamps at all falls back to the pid, which is
+    /// what it did before any of this.
+    @Test func anEntryWithoutTimestampsStillTrustsThePid() {
+        let mine = Int(ProcessInfo.processInfo.processIdentifier)
+        let bare = RegistrySession(raw: .object([
+            "pid": .integer(Int64(mine)), "sessionId": .string("s2"), "cwd": .string("/tmp/x"),
+        ]))
+        #expect(SessionRegistry.isLive(bare))
     }
 }
