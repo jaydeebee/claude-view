@@ -27,8 +27,17 @@ else
 fi
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Claude View"
+
+# The icon is generated art (scripts/make-icon.swift) checked in as an
+# .icns. Missing, the build still works and macOS draws the generic app
+# tile, so a checkout that has not run the generator is not broken.
+ICON=""
+if [ -f Resources/AppIcon.icns ]; then
+    cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+    ICON="AppIcon"
+fi
 
 {
 cat <<EOF
@@ -45,6 +54,12 @@ cat <<EOF
     <key>CFBundlePackageType</key>
     <string>APPL</string>
 EOF
+if [ -n "$ICON" ]; then
+cat <<EOF
+    <key>CFBundleIconFile</key>
+    <string>${ICON}</string>
+EOF
+fi
 if [ -n "$VERSION" ]; then
 cat <<EOF
     <key>CFBundleShortVersionString</key>
