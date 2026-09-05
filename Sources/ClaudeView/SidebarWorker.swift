@@ -33,8 +33,7 @@ actor SidebarWorker {
 
     private var indexCache: [URL: (modifiedAt: Date, index: SubagentIndex)] = [:]
     private var runCache: [URL: (dir: Date, journal: Date, run: WorkflowRun)] = [:]
-    private var titleCache: [URL: (modifiedAt: Date, title: String?)] = [:]
-    private var usageCache: [URL: (modifiedAt: Date, usage: ContextUsage?)] = [:]
+    private var summaryCache: [URL: (modifiedAt: Date, summary: TranscriptPeek.Summary)] = [:]
     private var cwdCache: [URL: String?] = [:]
 
     init(paths: ClaudePaths) {
@@ -70,7 +69,7 @@ actor SidebarWorker {
             let tree = agentTree(for: ref)
             state.agentTrees[sessionId] = tree
             record(tree, into: &state)
-            state.usage[url] = usage(for: url)
+            state.usage[url] = summary(for: url, modifiedAt: modificationDate(of: url)).usage
             scanned.insert(url)
             collectURLs(tree, into: &scanned)
         }
@@ -81,8 +80,10 @@ actor SidebarWorker {
 
         for project in state.projects {
             for transcript in project.transcripts {
-                state.titles[transcript.url] = title(for: transcript)
-                state.usage[transcript.url] = usage(for: transcript.url)
+                let summary = summary(
+                    for: transcript.url, modifiedAt: transcript.modifiedAt)
+                state.titles[transcript.url] = summary.title
+                state.usage[transcript.url] = summary.usage
             }
             state.projectPaths[project.slug] = projectPath(of: project)
         }
@@ -173,25 +174,16 @@ actor SidebarWorker {
         return nil
     }
 
-    private func title(for transcript: TranscriptFile) -> String? {
-        if let cached = titleCache[transcript.url],
-            cached.modifiedAt == transcript.modifiedAt
-        {
-            return cached.title
+    /// Title and context size for one transcript, read once and cached
+    /// until the file moves. Both come out of the same tail; asking for
+    /// them separately opened and read the file twice for every row.
+    private func summary(for url: URL, modifiedAt: Date) -> TranscriptPeek.Summary {
+        if let cached = summaryCache[url], cached.modifiedAt == modifiedAt {
+            return cached.summary
         }
-        let title = TranscriptPeek.quickTitle(url: transcript.url)
-        titleCache[transcript.url] = (transcript.modifiedAt, title)
-        return title
-    }
-
-    private func usage(for url: URL) -> ContextUsage? {
-        let mtime = modificationDate(of: url)
-        if let cached = usageCache[url], cached.modifiedAt == mtime {
-            return cached.usage
-        }
-        let usage = TranscriptPeek.quickUsage(url: url)
-        usageCache[url] = (mtime, usage)
-        return usage
+        let summary = TranscriptPeek.quickSummary(url: url)
+        summaryCache[url] = (modifiedAt, summary)
+        return summary
     }
 
     // MARK: Agent tree

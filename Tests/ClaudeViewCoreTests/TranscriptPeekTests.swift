@@ -19,7 +19,7 @@ import Testing
             #"{"type":"last-prompt","lastPrompt":"latest prompt","leafUuid":"x","sessionId":"s"}"#,
         ])
         defer { try? FileManager.default.removeItem(at: url) }
-        #expect(TranscriptPeek.quickTitle(url: url) == "New title")
+        #expect(TranscriptPeek.quickSummary(url: url).title == "New title")
     }
 
     @Test func fallsBackToLastPrompt() throws {
@@ -28,7 +28,7 @@ import Testing
             #"{"type":"last-prompt","lastPrompt":"the latest prompt","leafUuid":"x","sessionId":"s"}"#,
         ])
         defer { try? FileManager.default.removeItem(at: url) }
-        #expect(TranscriptPeek.quickTitle(url: url) == "the latest prompt")
+        #expect(TranscriptPeek.quickSummary(url: url).title == "the latest prompt")
     }
 
     @Test func titleBeyondWindowIsMissedGracefully() throws {
@@ -39,17 +39,17 @@ import Testing
         }
         let url = try write(lines)
         defer { try? FileManager.default.removeItem(at: url) }
-        #expect(TranscriptPeek.quickTitle(url: url, window: 1024) == nil)
+        #expect(TranscriptPeek.quickSummary(url: url, window: 1024).title == nil)
     }
 
     @Test func emptyAndMissingFiles() throws {
         let missing = URL(filePath: "/nonexistent/nope.jsonl")
-        #expect(TranscriptPeek.quickTitle(url: missing) == nil)
+        #expect(TranscriptPeek.quickSummary(url: missing).title == nil)
         let empty = try write([])
         defer { try? FileManager.default.removeItem(at: empty) }
-        #expect(TranscriptPeek.quickTitle(url: empty) == nil)
-        #expect(TranscriptPeek.quickUsage(url: missing) == nil)
-        #expect(TranscriptPeek.quickUsage(url: empty) == nil)
+        #expect(TranscriptPeek.quickSummary(url: empty).title == nil)
+        #expect(TranscriptPeek.quickSummary(url: missing).usage == nil)
+        #expect(TranscriptPeek.quickSummary(url: empty).usage == nil)
     }
 
     @Test func usageComesFromTheNewestAssistantTurn() throws {
@@ -60,7 +60,7 @@ import Testing
         ])
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let usage = try #require(TranscriptPeek.quickUsage(url: url))
+        let usage = try #require(TranscriptPeek.quickSummary(url: url).usage)
         #expect(usage.contextTokens == 2302)
         #expect(usage.at == TranscriptEntry.parseTimestamp("2026-08-23T10:05:00Z"))
         #expect(usage.cacheTTL == 300)
@@ -75,13 +75,13 @@ import Testing
             #"{"type":"assistant","uuid":"a1","timestamp":"2026-08-23T10:00:00Z","message":{"role":"assistant","usage":{"input_tokens":9223372036854775807,"cache_read_input_tokens":1,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"hi"}]}}"#
         ])
         defer { try? FileManager.default.removeItem(at: overflowing) }
-        #expect(TranscriptPeek.quickUsage(url: overflowing) == nil)
+        #expect(TranscriptPeek.quickSummary(url: overflowing).usage == nil)
 
         let negative = try write([
             #"{"type":"assistant","uuid":"a2","timestamp":"2026-08-23T09:00:00Z","message":{"role":"assistant","usage":{"input_tokens":-5,"cache_read_input_tokens":10,"cache_creation_input_tokens":0},"content":[{"type":"text","text":"hi"}]}}"#
         ])
         defer { try? FileManager.default.removeItem(at: negative) }
-        #expect(TranscriptPeek.quickUsage(url: negative) == nil)
+        #expect(TranscriptPeek.quickSummary(url: negative).usage == nil)
     }
 
     @Test func oneHourCacheWritesBuyTheLongClock() throws {
@@ -89,7 +89,7 @@ import Testing
             #"{"type":"assistant","uuid":"a1","timestamp":"2026-08-23T10:00:00Z","message":{"role":"assistant","usage":{"input_tokens":2,"cache_read_input_tokens":500,"cache_creation_input_tokens":40,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":40}},"content":[{"type":"text","text":"hi"}]}}"#
         ])
         defer { try? FileManager.default.removeItem(at: url) }
-        #expect(try #require(TranscriptPeek.quickUsage(url: url)).cacheTTL == 3600)
+        #expect(try #require(TranscriptPeek.quickSummary(url: url).usage).cacheTTL == 3600)
     }
 
     /// The window has to open somewhere, and sometimes it opens exactly on
@@ -104,7 +104,7 @@ import Testing
         // Exactly the bytes of the last two lines, so the window opens on
         // the first byte of the title.
         let window = (title + "\n" + filler + "\n").utf8.count
-        #expect(TranscriptPeek.quickTitle(url: url, window: window) == "Boundary title")
+        #expect(TranscriptPeek.quickSummary(url: url, window: window).title == "Boundary title")
     }
 
     /// A transcript can end on a line bigger than the whole window — an
@@ -117,7 +117,7 @@ import Testing
         let url = try write([title, huge])
         defer { try? FileManager.default.removeItem(at: url) }
 
-        #expect(TranscriptPeek.quickTitle(url: url, window: 1024) == "Behind the wall")
+        #expect(TranscriptPeek.quickSummary(url: url, window: 1024).title == "Behind the wall")
     }
 
     /// A turn that wrote no cache says nothing about the TTL. Reading the
@@ -130,7 +130,7 @@ import Testing
         ])
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let usage = try #require(TranscriptPeek.quickUsage(url: url))
+        let usage = try #require(TranscriptPeek.quickSummary(url: url).usage)
         // Size and clock start come from the newest turn …
         #expect(usage.contextTokens == 901)
         #expect(usage.at == TranscriptEntry.parseTimestamp("2026-08-23T10:30:00Z"))
@@ -146,7 +146,7 @@ import Testing
         ])
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let usage = try #require(TranscriptPeek.quickUsage(url: url))
+        let usage = try #require(TranscriptPeek.quickSummary(url: url).usage)
         #expect(usage.contextTokens == 703)
         #expect(usage.cacheTTL == 300)  // no breakdown → short clock
     }

@@ -26,23 +26,64 @@ public struct ContextUsage: Sendable, Equatable {
 /// Cheap glances at a transcript without reading the whole file — sidebar
 /// rows need a title for sessions that may be tens of megabytes.
 public enum TranscriptPeek {
-    /// Best-effort title from the tail of the file: Claude Code appends
-    /// `ai-title` sidecars as a session progresses, and `last-prompt` is a
-    /// serviceable fallback. Reads at most `window` bytes.
-    public static func quickTitle(url: URL, window: Int = 1 << 16) -> String? {
-        var fallback: String?
+    /// What the sidebar wants to know about a transcript it has not
+    /// opened: what to call it, and how much context it is carrying.
+    public struct Summary: Sendable {
+        /// Newest `ai-title` in the window, or the newest `last-prompt`
+        /// when the session never earned one.
+        public let title: String?
+        /// Context size as of the newest assistant turn in the window,
+        /// with the cache clock that turn's writes bought.
+        public let usage: ContextUsage?
+
+        public init(title: String?, usage: ContextUsage?) {
+            self.title = title
+            self.usage = usage
+        }
+    }
+
+    /// Both facts from one read of the tail.
+    ///
+    /// They were two calls with two windows, which meant opening each
+    /// transcript twice and reading the same region of it twice — for
+    /// every row of every project in the history list, on the scan that
+    /// has to finish before the sidebar can draw anything. The larger
+    /// window subsumes the smaller, so one read answers both, and a title
+    /// sitting between the old windows is now found rather than missed.
+    public static func quickSummary(url: URL, window: Int = 1 << 18) -> Summary {
+        var title: String?
+        var fallbackTitle: String?
+        var newest: (context: Int64, at: Date)?
+        var ttl: TimeInterval?
+
         for line in tailLines(url: url, window: window).reversed() {
             guard let entry = try? TranscriptEntry(line: Data(line), index: 0) else {
                 continue
             }
-            if let title = entry.aiTitle {
-                return title
+            if title == nil, let found = entry.aiTitle {
+                title = found
             }
-            if fallback == nil, let prompt = entry.lastPrompt {
-                fallback = String(prompt.prefix(80))
+            if fallbackTitle == nil, let prompt = entry.lastPrompt {
+                fallbackTitle = String(prompt.prefix(80))
             }
+            if entry.kind == .assistant, !entry.isSidechain, let usage = entry.usage {
+                if newest == nil, let at = entry.timestamp,
+                    let context = contextTokens(of: usage)
+                {
+                    newest = (context, at)
+                }
+                if ttl == nil { ttl = cacheTTL(of: usage) }
+            }
+            if title != nil, newest != nil, ttl != nil { break }
         }
-        return fallback
+
+        return Summary(
+            title: title ?? fallbackTitle,
+            // No turn in the window wrote cache at all: the short clock is
+            // the safe guess, since it only under-promises warmth.
+            usage: newest.map {
+                ContextUsage(contextTokens: $0.context, at: $0.at, cacheTTL: ttl ?? 300)
+            })
     }
 
     /// The working directory the session ran in, read from the head of
@@ -65,32 +106,6 @@ public enum TranscriptPeek {
             return cwd
         }
         return nil
-    }
-
-    /// Context size as of the newest assistant turn in the tail window —
-    /// the window is larger than the title's because a session can end on
-    /// a bulky tool result. Nil when no turn is in reach.
-    public static func quickUsage(url: URL, window: Int = 1 << 18) -> ContextUsage? {
-        var newest: (context: Int64, at: Date)?
-        var ttl: TimeInterval?
-        for line in tailLines(url: url, window: window).reversed() {
-            guard let entry = try? TranscriptEntry(line: Data(line), index: 0),
-                entry.kind == .assistant, !entry.isSidechain,
-                let usage = entry.usage
-            else { continue }
-            if newest == nil, let at = entry.timestamp,
-                let context = contextTokens(of: usage)
-            {
-                newest = (context, at)
-            }
-            if ttl == nil { ttl = cacheTTL(of: usage) }
-            if newest != nil, ttl != nil { break }
-        }
-        guard let newest else { return nil }
-        // No turn in the window wrote cache at all: the short clock is the
-        // safe guess, since it only under-promises warmth.
-        return ContextUsage(
-            contextTokens: newest.context, at: newest.at, cacheTTL: ttl ?? 300)
     }
 
     /// Which cache a turn's write bought, or nil when it wrote none.
