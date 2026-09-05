@@ -45,9 +45,14 @@ final class UpdateController {
     /// Quiet daily check: runs once per process however many windows call
     /// it, and speaks only when an update actually exists.
     func startupCheck() async {
+        // The guards come first, and the once-per-process flag is only set
+        // once there is something to be once about. Consumed before them,
+        // turning automatic checks on mid-session silently bought nothing
+        // until the next launch — the setting appeared to do nothing, in
+        // the session where you had just changed it.
+        guard automaticChecksEnabled, currentVersion != nil else { return }
         guard !startupCheckAttempted else { return }
         startupCheckAttempted = true
-        guard automaticChecksEnabled, currentVersion != nil else { return }
         if let last = UserDefaults.standard.object(forKey: Self.lastCheckKey)
             as? Date,
             // A stamp in the future means the clock rolled back; treat the

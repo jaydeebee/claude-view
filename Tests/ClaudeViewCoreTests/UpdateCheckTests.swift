@@ -59,4 +59,21 @@ import Testing
             return
         }
     }
+
+    /// The release URL is opened with NSWorkspace, which opens whatever
+    /// scheme it is handed. It comes off the network; it is checked.
+    @Test func onlyWebReleaseURLsAreAccepted() throws {
+        func release(_ url: String) -> ReleaseInfo? {
+            let json = try? JSONValue(
+                data: Data(
+                    #"{"tag_name":"v9.9.9","html_url":"\#(url)","draft":false,"prerelease":false}"#
+                        .utf8))
+            return json.flatMap(ReleaseInfo.init(json:))
+        }
+        #expect(release("https://github.com/x/y/releases/tag/v9.9.9") != nil)
+        #expect(release("http://example.com/r") != nil)
+        #expect(release("file:///Applications/Calculator.app") == nil)
+        #expect(release("x-apple-something://do-a-thing") == nil)
+        #expect(release("") == nil)
+    }
 }

@@ -29,20 +29,41 @@ ZIP="dist/ClaudeView-${VERSION}.zip"
 
 UNIVERSAL=1 VERSION="$VERSION" scripts/make-app.sh
 
+# The artifact path is only ever written by the final packaging step
+# below. Notarization submits its own copy under a scratch name and
+# removes it either way, so a failed run leaves nothing behind that looks
+# like a finished release — the previous version wrote the submission to
+# the artifact path itself and deleted it only on success, so a failure
+# left a stale, unstapled zip sitting exactly where a shippable one goes.
+rm -f "$ZIP"
+
 if [ -n "${NOTARY_PROFILE:-}" ]; then
     if [ -z "${CODESIGN_IDENTITY:-}" ]; then
         echo "error: notarization requires CODESIGN_IDENTITY" >&2
         exit 1
     fi
     echo "Notarizing..."
-    ditto -c -k --keepParent "$APP" "$ZIP"
-    xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+    SUBMISSION="dist/notarize-${VERSION}.zip"
+    trap 'rm -f "$SUBMISSION"' EXIT
+    ditto -c -k --keepParent "$APP" "$SUBMISSION"
+    xcrun notarytool submit "$SUBMISSION" --keychain-profile "$NOTARY_PROFILE" --wait
     xcrun stapler staple "$APP"
-    rm "$ZIP"
+    rm -f "$SUBMISSION"
+    trap - EXIT
 fi
 
 ditto -c -k --keepParent "$APP" "$ZIP"
 echo
 echo "Built $ZIP"
-echo "Publish with:"
-echo "  gh release create v${VERSION} '${ZIP}' --title 'Claude View ${VERSION}' --generate-notes"
+
+# Publishing instructions belong to a build someone could publish. An
+# unsigned local build cannot be, and printing the command anyway invited
+# exactly one mistake: shipping a zip that Gatekeeper refuses to open on
+# any machine but this one.
+if [ -n "${CODESIGN_IDENTITY:-}" ] && [ -n "${NOTARY_PROFILE:-}" ]; then
+    echo "Publish with:"
+    echo "  gh release create v${VERSION} '${ZIP}' --title 'Claude View ${VERSION}' --generate-notes"
+else
+    echo "Unsigned or un-notarized: fine for this machine, not for a release."
+    echo "For a publishable build, set CODESIGN_IDENTITY and NOTARY_PROFILE."
+fi

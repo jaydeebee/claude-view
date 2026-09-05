@@ -53,7 +53,13 @@ public struct ReleaseInfo: Sendable {
             let tag = json["tag_name"]?.stringValue,
             let version = AppVersion(tag),
             let urlString = json["html_url"]?.stringValue,
-            let url = URL(string: urlString)
+            let url = URL(string: urlString),
+            // This is handed to NSWorkspace, which will open whatever
+            // scheme it is given — file:, and worse. The field comes off
+            // the network, so it is checked before it is trusted, however
+            // unlikely GitHub is to be the one lying.
+            let scheme = url.scheme?.lowercased(),
+            scheme == "https" || scheme == "http"
         else { return nil }
         self.version = version
         self.tagName = tag
