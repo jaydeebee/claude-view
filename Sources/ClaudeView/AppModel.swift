@@ -41,6 +41,11 @@ final class AppModel {
     private var scanning: Task<Void, Never>?
     @ObservationIgnored
     private var rescanWanted = false
+    /// Set by `stop()`. Without it, a refresh already queued behind the
+    /// one being cancelled would start a fresh scan for a window that no
+    /// longer exists.
+    @ObservationIgnored
+    private var isStopped = false
 
     init(paths: ClaudePaths = ClaudePaths()) {
         self.paths = paths
@@ -48,6 +53,7 @@ final class AppModel {
     }
 
     func start() {
+        isStopped = false
         refresh()
         watcher = FSEventsWatcher(
             paths: [paths.projectsDir.path, paths.sessionsDir.path],
@@ -63,6 +69,10 @@ final class AppModel {
     /// trusted to do this — SwiftUI may hold @State for a while — and a
     /// live watcher keeps firing refreshes for a window nobody can see.
     func stop() {
+        // First, so that a scan finishing between here and its own
+        // cancellation check cannot schedule the follow-up.
+        isStopped = true
+        rescanWanted = false
         watcher?.stop()
         watcher = nil
         scanning?.cancel()
@@ -73,6 +83,7 @@ final class AppModel {
     /// more follows it. The work itself happens on the worker; only the
     /// assignment lands here.
     func refresh() {
+        guard !isStopped else { return }
         guard scanning == nil else {
             rescanWanted = true
             return
@@ -96,20 +107,17 @@ final class AppModel {
         // A session can briefly own two registry entries (a stale pid file
         // whose pid was recycled, then a resume). The registry lists
         // freshest first; keep that one — duplicate rows corrupt the List.
+        //
+        // The ref comes from the scan rather than being rebuilt here: an
+        // entry without a cwd needs a directory listing to place, which is
+        // not something to do in a view's body.
         var seen = Set<String>()
         return state.liveSessions.compactMap { session in
             guard let sessionId = session.sessionId,
-                let cwd = session.cwd,
-                seen.insert(sessionId).inserted
+                seen.insert(sessionId).inserted,
+                let ref = state.liveTranscripts[sessionId]
             else { return nil }
-            let slug = ClaudePaths.projectSlug(for: cwd)
-            return (
-                session,
-                SessionRef(
-                    projectSlug: slug,
-                    sessionId: sessionId,
-                    url: paths.transcriptURL(projectSlug: slug, sessionId: sessionId))
-            )
+            return (session, ref)
         }
     }
 

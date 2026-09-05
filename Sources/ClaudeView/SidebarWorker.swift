@@ -6,6 +6,9 @@ import Foundation
 /// filled caches during body evaluation.
 struct SidebarState: Sendable {
     var liveSessions: [RegistrySession] = []
+    /// Where each live session's transcript is, by session id. Resolved
+    /// here because it can take a directory listing to answer.
+    var liveTranscripts: [String: SessionRef] = [:]
     /// History listing, already trimmed to what the sidebar shows.
     var projects: [ProjectListing] = []
     var agentTrees: [String: [ActiveSubagent]] = [:]
@@ -47,7 +50,8 @@ actor SidebarWorker {
         state.liveSessions = registry.liveSessions()
 
         let live = Set(state.liveSessions.compactMap(\.sessionId))
-        state.projects = discovery.projects().compactMap { project in
+        let allProjects = discovery.projects()
+        state.projects = allProjects.compactMap { project in
             let rest = project.transcripts
                 .filter { !live.contains($0.sessionId) }
                 .prefix(Self.historyLimit)
@@ -60,12 +64,12 @@ actor SidebarWorker {
         var seen = Set<String>()
         var scanned: Set<URL> = []
         for session in state.liveSessions {
-            guard let sessionId = session.sessionId, let cwd = session.cwd,
-                seen.insert(sessionId).inserted
+            guard let sessionId = session.sessionId,
+                seen.insert(sessionId).inserted,
+                let ref = liveRef(for: session, in: allProjects)
             else { continue }
-            let slug = ClaudePaths.projectSlug(for: cwd)
-            let url = paths.transcriptURL(projectSlug: slug, sessionId: sessionId)
-            let ref = SessionRef(projectSlug: slug, sessionId: sessionId, url: url)
+            let url = ref.url
+            state.liveTranscripts[sessionId] = ref
             let tree = agentTree(for: ref)
             state.agentTrees[sessionId] = tree
             record(tree, into: &state)
@@ -93,6 +97,34 @@ actor SidebarWorker {
             state.projectPaths[ClaudePaths.projectSlug(for: cwd)] = cwd
         }
         return state
+    }
+
+    /// Where a live session's transcript is.
+    ///
+    /// Normally the entry says: cwd and session id give the path without
+    /// reading anything. An entry can arrive without a cwd, though, and
+    /// one that did vanished from the sidebar completely — no path could
+    /// be built for it, so Live dropped it, and History hides whatever
+    /// Live is claiming, so History dropped it too. The file is findable
+    /// without the cwd: it is the one named after the session.
+    private func liveRef(
+        for session: RegistrySession, in projects: [ProjectListing]
+    ) -> SessionRef? {
+        guard let sessionId = session.sessionId else { return nil }
+        if let cwd = session.cwd {
+            let slug = ClaudePaths.projectSlug(for: cwd)
+            return SessionRef(
+                projectSlug: slug,
+                sessionId: sessionId,
+                url: paths.transcriptURL(projectSlug: slug, sessionId: sessionId))
+        }
+        for project in projects {
+            if let match = project.transcripts.first(where: { $0.sessionId == sessionId }) {
+                return SessionRef(
+                    projectSlug: project.slug, sessionId: sessionId, url: match.url)
+            }
+        }
+        return nil
     }
 
     /// Every transcript in an agent tree, which is every file the
