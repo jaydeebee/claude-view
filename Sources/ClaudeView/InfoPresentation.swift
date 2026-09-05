@@ -16,9 +16,26 @@ enum InfoPresentation {
         case .system:
             let subtype = entry.subtype ?? "system"
             return (humanize(subtype), systemDetail(subtype: subtype, entry: entry))
+        case .user:
+            // An orphan tool result: the assembler surfaced it rather than
+            // let it vanish with the call it cannot find, and the row is
+            // about the result, so say what the result was.
+            return (sentenceCase(fallback), toolResultText(of: entry).map(firstLine))
         default:
             return (sentenceCase(fallback), nil)
         }
+    }
+
+    /// The text carried by a user entry's tool_result blocks. Flattened the
+    /// same way a paired result is, so an orphan reads like the row it
+    /// would have been part of.
+    static func toolResultText(of entry: TranscriptEntry) -> String? {
+        let pieces = entry.contentBlocks.compactMap { block -> String? in
+            guard case .toolResult(_, let content, _) = block else { return nil }
+            let text = ContentBlock.flattenedText(of: content)
+            return text.isEmpty ? nil : text
+        }
+        return pieces.isEmpty ? nil : pieces.joined(separator: "\n")
     }
 
     private static func attachmentDetail(type: String, payload: JSONValue?) -> String? {
@@ -160,6 +177,15 @@ extension InfoPresentation {
         case raw
     }
 
+    /// A payload string worth rendering: present and not empty. An empty
+    /// one is not readable content, and returning it as such draws an
+    /// empty box — a row that opens onto nothing looks broken, where the
+    /// raw entry at least shows that the field really is "".
+    private static func readable(_ value: JSONValue?) -> String? {
+        guard let text = value?.stringValue, !text.isEmpty else { return nil }
+        return text
+    }
+
     static func expanded(for entry: TranscriptEntry) -> Expanded {
         switch entry.kind {
         case .attachment:
@@ -168,15 +194,15 @@ extension InfoPresentation {
             case "edited_text_file":
                 // Post-edit content with line numbers; a true diff against
                 // the ~/.claude/file-history backup is a future feature.
-                if let snippet = payload?["snippet"]?.stringValue {
+                if let snippet = readable(payload?["snippet"]) {
                     return .code(snippet)
                 }
             case "queued_command":
-                if let prompt = payload?["prompt"]?.stringValue {
+                if let prompt = readable(payload?["prompt"]) {
                     return .text(prompt)
                 }
             case "skill_listing":
-                if let content = payload?["content"]?.stringValue {
+                if let content = readable(payload?["content"]) {
                     return .text(content)
                 }
             case "agent_listing_delta", "deferred_tools_delta":
@@ -195,6 +221,9 @@ extension InfoPresentation {
             if let content = entry.raw["content"]?.stringValue, !content.isEmpty {
                 return .text(content)
             }
+            return .raw
+        case .user:
+            if let text = toolResultText(of: entry) { return .text(text) }
             return .raw
         default:
             return .raw

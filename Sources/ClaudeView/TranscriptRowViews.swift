@@ -315,16 +315,37 @@ struct InfoExpandedView: View {
     var body: some View {
         switch InfoPresentation.expanded(for: entry) {
         case .code(let code):
-            CodeBlockView(code: code, language: nil)
-                .padding(.leading, 22)
+            VStack(alignment: .leading, spacing: 4) {
+                CodeBlockView(code: String(code.prefix(Self.textLimit)), language: nil)
+                truncationNote(for: code)
+            }
+            .padding(.leading, 22)
         case .text(let text):
-            Text(String(text.prefix(Self.textLimit)))
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .padding(.leading, 22)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(String(text.prefix(Self.textLimit)))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                truncationNote(for: text)
+            }
+            .padding(.leading, 22)
         case .raw:
             RawEntryView(entry: entry)
+        }
+    }
+
+    /// Says so when there is more payload than is on screen.
+    ///
+    /// The limit is not cosmetic. A snippet is normally a few kilobytes,
+    /// but nothing in the format promises that, and a Text holding a whole
+    /// large file pins a core and draws nothing at all — the row reads as
+    /// empty rather than long. `dropFirst` walks the limit, not the string,
+    /// so asking this question costs the same whatever arrives.
+    @ViewBuilder private func truncationNote(for payload: String) -> some View {
+        if !payload.dropFirst(Self.textLimit).isEmpty {
+            Text("… truncated")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 }
