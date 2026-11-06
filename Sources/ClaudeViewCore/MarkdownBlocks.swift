@@ -51,11 +51,7 @@ public struct MarkdownBlock: Identifiable {
 public enum MarkdownBlocks {
     public static func parse(_ text: String) -> [MarkdownBlock] {
         let text = softenLabelBreaks(text)
-        let options = AttributedString.MarkdownParsingOptions(
-            allowsExtendedAttributes: false,
-            interpretedSyntax: .full,
-            failurePolicy: .returnPartiallyParsedIfPossible)
-        guard let attributed = try? AttributedString(markdown: text, options: options) else {
+        guard let attributed = attributed(text, syntax: .full) else {
             return [MarkdownBlock(id: 0, kind: .paragraph, content: AttributedString(text))]
         }
 
@@ -76,6 +72,94 @@ public enum MarkdownBlocks {
         }
         builder.finish()
         return builder.blocks
+    }
+
+    /// Parses Markdown with home-directory tildes kept out of strikethrough.
+    ///
+    /// Foundation's parser takes GFM's single-tilde strikethrough, and a
+    /// tilde with punctuation on both sides can both open and close one —
+    /// which is exactly what `~/` is. So `(~/a) and (~/b)` came out as
+    /// "(", a struck "/a) and (", then "/b)": the tildes gone and the
+    /// prose between two paths crossed out. Claude names home-relative
+    /// paths constantly, and not always inside backticks.
+    ///
+    /// A lone `~` before `/` is swapped for a stand-in before parsing and
+    /// put back after. Not a backslash escape: a backslash is literal in
+    /// code spans, code blocks and autolinks, so escaping would need to
+    /// know where those are — the parser's job, not ours. The stand-in is
+    /// SWUNG DASH, punctuation like the tilde it replaces, so the flanking
+    /// rules that decide `*` and `_` emphasis around it see the same
+    /// thing; a letter-class stand-in changed emphasis on its neighbours.
+    /// Text that already contains a swung dash is parsed as is rather than
+    /// risk turning the author's own into tildes.
+    ///
+    /// `~~struck~~`, `~word~` and `~~~` fences are untouched: only a run of
+    /// exactly one tilde, followed by a slash, and not backslash-escaped.
+    public static func attributed(
+        _ text: String, syntax: AttributedString.MarkdownParsingOptions.InterpretedSyntax
+    ) -> AttributedString? {
+        let options = AttributedString.MarkdownParsingOptions(
+            allowsExtendedAttributes: false,
+            interpretedSyntax: syntax,
+            failurePolicy: .returnPartiallyParsedIfPossible)
+        guard let guarded = guardHomeTildes(text) else {
+            return try? AttributedString(markdown: text, options: options)
+        }
+        guard var result = try? AttributedString(markdown: guarded, options: options) else {
+            return nil
+        }
+        restoreHomeTildes(in: &result)
+        return result
+    }
+
+    static let tildeStandIn: Character = "\u{2053}"
+    private static let encodedStandIn = "%E2%81%93"
+
+    /// The text with each guarded tilde swapped for the stand-in, or nil
+    /// when there is nothing to guard (or the stand-in is already taken).
+    static func guardHomeTildes(_ text: String) -> String? {
+        guard text.contains("~/"), !text.contains(tildeStandIn) else { return nil }
+        var out = ""
+        out.reserveCapacity(text.utf8.count)
+        var previous: Character?
+        var escaped = false
+        var iterator = Array(text)[...]
+        while let c = iterator.popFirst() {
+            defer { previous = c }
+            if escaped {
+                escaped = false
+                out.append(c)
+                continue
+            }
+            if c == "\\" {
+                escaped = true
+                out.append(c)
+                continue
+            }
+            if c == "~", previous != "~", iterator.first == "/" {
+                out.append(tildeStandIn)
+            } else {
+                out.append(c)
+            }
+        }
+        return out
+    }
+
+    /// Puts the tildes back: in the text, and in link destinations, where
+    /// the parser has already percent-encoded the stand-in.
+    static func restoreHomeTildes(in attributed: inout AttributedString) {
+        // From the top each time: a mutation invalidates every index, and
+        // each pass removes the stand-in it found.
+        while let found = attributed.characters.firstIndex(of: tildeStandIn) {
+            let next = attributed.characters.index(after: found)
+            attributed.characters.replaceSubrange(found..<next, with: "~")
+        }
+        for run in attributed.runs {
+            if let link = run.link, link.absoluteString.contains(encodedStandIn) {
+                attributed[run.range].link = URL(
+                    string: link.absoluteString.replacingOccurrences(of: encodedStandIn, with: "~"))
+            }
+        }
     }
 
     /// Newlines inside a link or image label, replaced by the space

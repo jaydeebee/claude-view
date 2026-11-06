@@ -265,4 +265,92 @@ import Testing
         // Nothing to do, nothing done.
         #expect(MarkdownBlocks.softenLabelBreaks("plain text") == "plain text")
     }
+
+    private func struck(_ attributed: AttributedString) -> String {
+        attributed.runs
+            .filter { $0.inlinePresentationIntent?.contains(.strikethrough) == true }
+            .map { String(attributed[$0.range].characters) }
+            .joined()
+    }
+
+    /// #32: two home-relative paths crossed out everything between them.
+    /// `~/` has punctuation on both sides, so each tilde can open or close
+    /// GFM's single-tilde strikethrough.
+    @Test func homePathsAreNotStrikethrough() throws {
+        for source in [
+            "Both (~/a) and (~/b) exist.",
+            "\"~/a\" and \"~/b\"",
+            "x=~/a, y=~/b",
+            "~/a/~/b",
+        ] {
+            // The bug is real: Foundation alone strikes these.
+            let raw = try AttributedString(
+                markdown: source, options: .init(interpretedSyntax: .full))
+            #expect(!struck(raw).isEmpty, "no longer reproduces: \(source)")
+
+            for syntax in [
+                AttributedString.MarkdownParsingOptions.InterpretedSyntax.full,
+                .inlineOnlyPreservingWhitespace,
+            ] {
+                let parsed = try #require(MarkdownBlocks.attributed(source, syntax: syntax))
+                #expect(struck(parsed).isEmpty, "\(source)")
+                #expect(String(parsed.characters) == source)
+            }
+        }
+
+        let blocks = MarkdownBlocks.parse("Moved (~/src/a) to (~/src/b).")
+        #expect(blocks.map(plain) == ["Moved (~/src/a) to (~/src/b)."])
+    }
+
+    /// Only the path tilde is guarded: deliberate strikethrough, fences,
+    /// escapes and code all come through as Foundation gives them.
+    @Test func tildeGuardingTouchesOnlyHomePaths() throws {
+        let strike = try #require(
+            MarkdownBlocks.attributed("a ~~gone~~ and ~also~ (~/kept)", syntax: .full))
+        #expect(struck(strike) == "gonealso")
+        #expect(String(strike.characters) == "a gone and also (~/kept)")
+
+        // A tilde fence is three tildes, not three lone ones.
+        let fence = MarkdownBlocks.parse("~~~\nls (~/a) (~/b)\n~~~")
+        guard case .code = fence.first?.kind else {
+            Issue.record("expected a code block, got \(String(describing: fence.first?.kind))")
+            return
+        }
+        #expect(plain(fence[0]) == "ls (~/a) (~/b)")
+
+        // Code spans keep their tildes and their backslashes.
+        let code = try #require(
+            MarkdownBlocks.attributed(#"`(~/a)` and `\~/b` (~/c)"#, syntax: .full))
+        #expect(String(code.characters) == #"(~/a) and \~/b (~/c)"#)
+
+        // An escaped tilde is already safe, and stays escaped.
+        #expect(MarkdownBlocks.guardHomeTildes(#"(\~/a)"#) == #"(\~/a)"#)
+        // An escaped backslash does not escape the tilde after it.
+        #expect(
+            MarkdownBlocks.guardHomeTildes(#"(\\~/a)"#)
+                == "(\\\\\(MarkdownBlocks.tildeStandIn)/a)")
+        // Nothing to guard, nothing done.
+        #expect(MarkdownBlocks.guardHomeTildes("about ~5 minutes") == nil)
+        // An author's own swung dash is never mistaken for a stand-in.
+        #expect(MarkdownBlocks.guardHomeTildes("\u{2053} (~/a)") == nil)
+    }
+
+    /// The stand-in must come out everywhere the parser put it: styled
+    /// runs keep their styling, and link destinations their tilde.
+    @Test func restoredTildesKeepStylingAndLinks() throws {
+        let bold = try #require(
+            MarkdownBlocks.attributed("**see (~/a)** and (~/b)", syntax: .full))
+        #expect(String(bold.characters) == "see (~/a) and (~/b)")
+        let strong = bold.runs.filter {
+            $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        }
+        #expect(strong.map { String(bold[$0.range].characters) } == ["see (~/a)"])
+
+        let link = try #require(
+            MarkdownBlocks.attributed(
+                "[home](https://example.com/~/x) and (~/b)", syntax: .full))
+        let url = link.runs.compactMap(\.link).first
+        #expect(url?.absoluteString == "https://example.com/~/x")
+        #expect(!String(link.characters).contains(MarkdownBlocks.tildeStandIn))
+    }
 }

@@ -1,3 +1,4 @@
+import ClaudeViewCore
 import SwiftUI
 
 /// Markdown-ish text: inline styling (bold, code, links) with whitespace
@@ -25,9 +26,7 @@ struct MarkdownText: View {
     }
 
     private func attributed(_ s: String) -> AttributedString {
-        (try? AttributedString(
-            markdown: s,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+        MarkdownBlocks.attributed(s, syntax: .inlineOnlyPreservingWhitespace)
             ?? AttributedString(s)
     }
 }
