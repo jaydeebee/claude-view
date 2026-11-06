@@ -45,6 +45,20 @@ import Testing
         #expect(fork.subagent?.transcriptURL.lastPathComponent == "agent-fork123.jsonl")
     }
 
+    /// The launch line's stdout is terminal output like any other, and
+    /// the console rows beside it already shed their escapes (#20).
+    @Test func forkLaunchStdoutShedsANSI() throws {
+        let line = launchLine.replacingOccurrences(
+            of: "Running in the background as @code-review",
+            with: #"\u001b[2mRunning in the background as @code-review\u001b(B\u001b[m"#)
+        let snapshot = SessionAssembler().assemble(entries: try entries([line]))
+        guard case .forkLaunch(let fork) = snapshot.rows.first else {
+            Issue.record("expected a forkLaunch row, got \(String(describing: snapshot.rows.first))")
+            return
+        }
+        #expect(fork.stdout == "Running in the background as @code-review")
+    }
+
     @Test func taskNotificationMarksForkComplete() throws {
         let snapshot = SessionAssembler()
             .assemble(entries: try entries([launchLine, notificationLine]))

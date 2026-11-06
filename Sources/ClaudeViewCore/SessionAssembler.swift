@@ -356,8 +356,7 @@ public struct SessionAssembler: Sendable {
             agentId: agentId,
             skillName: marker["skillName"]?.stringValue,
             launchDescription: marker["description"]?.stringValue,
-            stdout: LocalCommandMarkup.tagContent("local-command-stdout", in: content)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
+            stdout: consoleText("local-command-stdout", in: content),
             subagent: subagents.byAgentId[agentId])
     }
 

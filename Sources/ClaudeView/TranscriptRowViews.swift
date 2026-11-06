@@ -386,7 +386,11 @@ struct ToolCallRowView: View {
     }
 
     @ViewBuilder private var resultSection: some View {
-        let text = ContentBlock.flattenedText(of: call.resultContent ?? .null)
+        // Bash results carry whatever the command printed, colour codes
+        // included; the console rows strip them and this has to as well,
+        // or a green PASS reads "[32mPASS[0m".
+        let text = ANSIText.stripped(
+            ContentBlock.flattenedText(of: call.resultContent ?? .null))
         if text.isEmpty {
             Text("empty result")
                 .font(.caption)

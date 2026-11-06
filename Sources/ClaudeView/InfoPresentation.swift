@@ -32,7 +32,7 @@ enum InfoPresentation {
     static func toolResultText(of entry: TranscriptEntry) -> String? {
         let pieces = entry.contentBlocks.compactMap { block -> String? in
             guard case .toolResult(_, let content, _) = block else { return nil }
-            let text = ContentBlock.flattenedText(of: content)
+            let text = ANSIText.stripped(ContentBlock.flattenedText(of: content))
             return text.isEmpty ? nil : text
         }
         return pieces.isEmpty ? nil : pieces.joined(separator: "\n")
@@ -111,7 +111,7 @@ enum InfoPresentation {
         guard let content = entry.raw["content"]?.stringValue else { return nil }
         let out = LocalCommandMarkup.tagContent("local-command-stdout", in: content)
         let err = LocalCommandMarkup.tagContent("local-command-stderr", in: content)
-        let joined = [out, err].compactMap { $0 }.joined(separator: "\n")
+        let joined = ANSIText.stripped([out, err].compactMap { $0 }.joined(separator: "\n"))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return joined.isEmpty ? nil : joined
     }
