@@ -178,14 +178,36 @@ private struct ReplyTextRowView: View {
         MarkdownBlockText(text: text)
             .padding(.vertical, 2)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(alignment: .topTrailing) {
+            .overlay {
                 if isHovering || copiedAt != nil {
-                    copyButton
+                    stickyCopyButton
                         .transition(.opacity)
                 }
             }
-            .onHover { isHovering = $0 }
+            // Not .onHover: SwiftUI tracks hover only in the key window,
+            // and this window is almost never key. The viewer sits beside
+            // the terminal, where the typing happens, so a button that
+            // needed a click into the viewer first was a button nobody saw.
+            .background(HoverTracker { isHovering = $0 })
             .animation(.easeOut(duration: 0.12), value: isHovering)
+    }
+
+    /// The button rides down the block's right edge to stay on screen.
+    /// Pinned to the top corner it was out of sight for exactly the blocks
+    /// most worth copying — a long reply, read to the end, with its top
+    /// long since scrolled away. Only measured while the button is shown,
+    /// so a block nobody is pointing at does no geometry work on scroll.
+    private var stickyCopyButton: some View {
+        GeometryReader { proxy in
+            let frame = proxy.frame(in: .scrollView)
+            let inset: CGFloat = 4
+            let buttonHeight: CGFloat = 26
+            let lowest = max(0, proxy.size.height - buttonHeight)
+            let offset = min(max(0, -frame.minY + inset), lowest)
+            copyButton
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .offset(y: offset)
+        }
     }
 
     @ViewBuilder private var copyButton: some View {
@@ -760,5 +782,110 @@ struct TaskNotificationRowView: View {
             parts.append("\(tools) tool\(tools == 1 ? "" : "s")")
         }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+/// Hover that works whether or not the window is key.
+///
+/// SwiftUI's hover tracking follows AppKit's default, which only reports
+/// the mouse in the key window. This is a tracking area that is active
+/// always, behind the content it tracks; it takes no clicks, so whatever
+/// is drawn on top of it behaves exactly as before.
+///
+/// Enter and exit events alone are not enough. When the transcript
+/// scrolls under a pointer that is not moving, AppKit tells the block
+/// arriving under it but not the one leaving, and the departed block kept
+/// its button: two Copy buttons on screen, one of them nowhere near the
+/// pointer. So every scroll asks again where the pointer actually is.
+struct HoverTracker: NSViewRepresentable {
+    let onChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> TrackingView {
+        let view = TrackingView()
+        view.onChange = onChange
+        return view
+    }
+
+    func updateNSView(_ view: TrackingView, context: Context) {
+        view.onChange = onChange
+    }
+
+    static func dismantleNSView(_ view: TrackingView, coordinator: ()) {
+        view.stopObservingScroll()
+    }
+
+    final class TrackingView: NSView {
+        var onChange: ((Bool) -> Void)?
+        private var isInside = false
+        private var scrollObserver: NSObjectProtocol?
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            // Since macOS 14 views do not clip by default, and an unclipped
+            // view's visibleRect is everything its scroll view shows — not
+            // its own part of it. Both the tracking area (.inVisibleRect)
+            // and the scroll check read it, so every block on screen
+            // believed the pointer was over it and kept its button up.
+            clipsToBounds = true
+        }
+
+        required init?(coder: NSCoder) {
+            super.init(coder: coder)
+            clipsToBounds = true
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(
+                NSTrackingArea(
+                    rect: .zero,
+                    options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                    owner: self))
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            stopObservingScroll()
+            guard window != nil, let clip = enclosingScrollView?.contentView else {
+                report(false)
+                return
+            }
+            clip.postsBoundsChangedNotifications = true
+            scrollObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.reconcile() }
+            }
+        }
+
+        func stopObservingScroll() {
+            if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+            scrollObserver = nil
+        }
+
+        override func mouseEntered(with event: NSEvent) { reconcile() }
+        override func mouseExited(with event: NSEvent) { reconcile() }
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        /// Inside means over this view's visible part *and* over this
+        /// window: an always-active tracking area cannot tell that another
+        /// app's window is covering the spot.
+        private func reconcile() {
+            guard let window else { return report(false) }
+            let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            // Every block on screen hears every scroll frame; only the one
+            // under the pointer gets as far as asking the window server.
+            guard bounds.intersection(visibleRect).contains(point) else { return report(false) }
+            let topmost = NSWindow.windowNumber(
+                at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0)
+            report(topmost == window.windowNumber)
+        }
+
+        private func report(_ inside: Bool) {
+            guard inside != isInside else { return }
+            isInside = inside
+            onChange?(inside)
+        }
     }
 }
