@@ -18,12 +18,44 @@ if [ -z "${VERSION:-}" ]; then
 fi
 APP="dist/Claude View.app"
 
+ARCH_FLAGS=()
 if [ "${UNIVERSAL:-0}" = "1" ]; then
-    swift build -c release --arch arm64 --arch x86_64
-    BIN=".build/apple/Products/Release/ClaudeView"
-else
-    swift build -c release
-    BIN=".build/release/ClaudeView"
+    ARCH_FLAGS=(--arch arm64 --arch x86_64)
+fi
+# The empty-array dance: macOS's bash 3.2 calls "${a[@]}" of an empty
+# array unbound under set -u.
+swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"}
+
+# Asked, not assumed. This was a hardcoded .build/apple/Products/Release,
+# which is where universal builds went until a toolchain update moved
+# them to .build/out — and the old directory stayed behind with its old
+# binary in it. 0.6.0 shipped that binary: the 0.5.0 code, stamped 0.6.0,
+# signed, notarized and published without a single error along the way.
+BIN="$(swift build -c release ${ARCH_FLAGS[@]+"${ARCH_FLAGS[@]}"} --show-bin-path)/ClaudeView"
+
+# And checked, because the failure is silent by nature: a stale binary
+# builds, signs and runs. A source file newer than the binary means the
+# build did not produce it.
+if [ ! -x "$BIN" ]; then
+    echo "error: no binary at $BIN" >&2
+    exit 1
+fi
+STALE="$(find Sources Package.swift -newer "$BIN" -type f | head -1)"
+if [ -n "$STALE" ]; then
+    echo "error: $BIN is older than $STALE — not what this build produced" >&2
+    exit 1
+fi
+if [ "${UNIVERSAL:-0}" = "1" ]; then
+    ARCHS=" $(lipo -archs "$BIN") "
+    for arch in arm64 x86_64; do
+        case "$ARCHS" in
+            *" $arch "*) ;;
+            *)
+                echo "error: universal build lacks $arch: $BIN has '${ARCHS# }'" >&2
+                exit 1
+                ;;
+        esac
+    done
 fi
 
 rm -rf "$APP"
