@@ -6,14 +6,47 @@ struct TranscriptRowView: View {
     let row: SessionRow
     @Binding var isExpanded: Bool
     let context: RowContext
+    /// The Markdown of every reply block in this row's turn, when the turn
+    /// has more than this one block to offer. Built on demand: it is only
+    /// wanted when the menu item is chosen, not on every body pass.
+    var turnReply: (() -> String)? = nil
 
     var body: some View {
         content
             .contextMenu {
+                copyItems
                 Button("Inspect Entry") {
                     context.onInspect(row.entry)
                 }
             }
+    }
+
+    /// The source text as written — Markdown and all — for the rows that
+    /// have prose to take elsewhere. Selecting rendered text and copying
+    /// it gets the styling's plain characters, not the asterisks and
+    /// fences that made it.
+    @ViewBuilder private var copyItems: some View {
+        switch row {
+        case .prompt(_, let text):
+            Button("Copy Prompt") { copyToPasteboard(text) }
+            Divider()
+        case .assistantText(_, let text):
+            Button("Copy Markdown") { copyToPasteboard(text) }
+            if let turnReply {
+                Button("Copy Whole Reply as Markdown") { copyToPasteboard(turnReply()) }
+            }
+            Divider()
+        case .thinking(_, let text) where !text.isEmpty:
+            Button("Copy Thinking") { copyToPasteboard(text) }
+            Divider()
+        case .taskNotification(let note):
+            if let result = note.result, !result.isEmpty {
+                Button("Copy Result as Markdown") { copyToPasteboard(result) }
+                Divider()
+            }
+        default:
+            EmptyView()
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -21,8 +54,7 @@ struct TranscriptRowView: View {
         case .prompt(_, let text):
             PromptRowView(text: text)
         case .assistantText(_, let text):
-            MarkdownBlockText(text: text)
-                .padding(.vertical, 2)
+            ReplyTextRowView(text: text, turnReply: turnReply)
         case .thinking(_, let text):
             if text.isEmpty {
                 // Claude Code stores thinking redacted on disk: empty text
@@ -125,6 +157,85 @@ struct TranscriptRowView: View {
     private func typeSuffix(_ entry: TranscriptEntry) -> String {
         if case .unknown(let type) = entry.kind { return ": \(type)" }
         return ""
+    }
+}
+
+/// One block of the assistant's reply, with a copy button that shows on
+/// hover.
+///
+/// The button is the way in because a context menu is not: the text is
+/// selectable, and right-clicking selectable text gets the system's text
+/// menu (Look Up, Copy, Share…) instead of the row's. Its Copy copies the
+/// rendered characters, without the Markdown that made them.
+private struct ReplyTextRowView: View {
+    let text: String
+    let turnReply: (() -> String)?
+
+    @State private var isHovering = false
+    @State private var copiedAt: Date?
+
+    var body: some View {
+        MarkdownBlockText(text: text)
+            .padding(.vertical, 2)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(alignment: .topTrailing) {
+                if isHovering || copiedAt != nil {
+                    copyButton
+                        .transition(.opacity)
+                }
+            }
+            .onHover { isHovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: isHovering)
+    }
+
+    @ViewBuilder private var copyButton: some View {
+        Group {
+            if let turnReply {
+                Menu {
+                    Button("Copy This Block") { copy(text) }
+                    Button("Copy Whole Reply") { copy(turnReply()) }
+                } label: {
+                    copyLabel
+                } primaryAction: {
+                    copy(text)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.visible)
+                .fixedSize()
+            } else {
+                Button { copy(text) } label: { copyLabel }
+                    .buttonStyle(.borderless)
+            }
+        }
+        .help("Copy as Markdown")
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(RoundedRectangle(cornerRadius: 6).fill(.regularMaterial))
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary))
+    }
+
+    private var copyLabel: some View {
+        Label(
+            copiedAt == nil ? "Copy" : "Copied",
+            systemImage: copiedAt == nil ? "doc.on.doc" : "checkmark"
+        )
+        .font(.caption)
+        .labelStyle(.titleAndIcon)
+    }
+
+    /// Says it worked, briefly. Stamped so a second copy inside the
+    /// window extends the confirmation instead of the first one's timer
+    /// cutting it short.
+    private func copy(_ string: String) {
+        copyToPasteboard(string)
+        let stamp = Date()
+        copiedAt = stamp
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.2))
+            if copiedAt == stamp {
+                withAnimation(.easeOut(duration: 0.2)) { copiedAt = nil }
+            }
+        }
     }
 }
 

@@ -166,6 +166,8 @@ private struct TranscriptLoadedView: View {
                         isExpanded: isTurnExpanded(turn, total: groups.count),
                         stepCount: turn.rows.count,
                         durationText: turn.durationText,
+                        hasReply: turn.replyBlockCount > 0,
+                        reply: { turn.replyMarkdown },
                         onToggle: {
                             withAnimation(.easeInOut(duration: 0.15)) {
                                 turnOverrides[turn.id] =
@@ -176,15 +178,18 @@ private struct TranscriptLoadedView: View {
                 .padding(.top, 3)
                 .id(turn.id)
                 if isTurnExpanded(turn, total: groups.count) {
-                    turnRows(turn.rows)
+                    turnRows(turn)
                 }
             } else {
-                turnRows(turn.rows)
+                turnRows(turn)
             }
         }
     }
 
-    @ViewBuilder private func turnRows(_ rows: [DisplayRow]) -> some View {
+    @ViewBuilder private func turnRows(_ turn: TurnGroup) -> some View {
+        let rows = turn.rows
+        let turnReply: (() -> String)? =
+            turn.replyBlockCount > 1 ? { turn.replyMarkdown } : nil
         ForEach(Array(rows.enumerated()), id: \.element.id) { index, item in
             NewRowFade(
                 isNew: isNewRowId(item.id), onReveal: { markSettled(item.id) }
@@ -192,7 +197,8 @@ private struct TranscriptLoadedView: View {
                 TranscriptRowView(
                     row: item.row,
                     isExpanded: expansionBinding(for: item),
-                    context: rowContext)
+                    context: rowContext,
+                    turnReply: turnReply)
             }
             // Runs of the same row type stay tight (4); a type change opens
             // the gap to 7 — repeated Bash calls read as one burst of work.
@@ -512,6 +518,25 @@ private struct TurnGroup: Identifiable {
     let promptText: String?
     var rows: [DisplayRow] = []
 
+    /// Everything the assistant said in this turn, block by block, as the
+    /// Markdown it was written in. Text blocks between tool calls are part
+    /// of the reply as much as the last one is; a blank line keeps each
+    /// its own paragraph when pasted.
+    var replyMarkdown: String {
+        rows.compactMap { item -> String? in
+            if case .assistantText(_, let text) = item.row { return text }
+            return nil
+        }
+        .joined(separator: "\n\n")
+    }
+
+    var replyBlockCount: Int {
+        rows.reduce(0) { count, item in
+            if case .assistantText = item.row { return count + 1 }
+            return count
+        }
+    }
+
     var durationText: String? {
         for item in rows {
             if case .info(let entry, _) = item.row, entry.subtype == "turn_duration" {
@@ -530,6 +555,8 @@ private struct TurnHeaderView: View {
     let isExpanded: Bool
     let stepCount: Int
     let durationText: String?
+    let hasReply: Bool
+    let reply: () -> String
     let onToggle: () -> Void
 
     var body: some View {
@@ -580,6 +607,12 @@ private struct TurnHeaderView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             if !isExpanded { onToggle() }
+        }
+        .contextMenu {
+            Button("Copy Prompt") { copyToPasteboard(text) }
+            // Asked when the menu is chosen, not when it is drawn.
+            Button("Copy Reply as Markdown") { copyToPasteboard(reply()) }
+                .disabled(!hasReply)
         }
     }
 }
